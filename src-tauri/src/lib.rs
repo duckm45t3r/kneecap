@@ -164,13 +164,23 @@ struct TestReq<'a> {
     messages: Vec<ChatMsg<'a>>,
 }
 
+/// Build a reqwest client that never follows redirects. For LLM API calls
+/// we ALWAYS want this — a 3xx from `api.anthropic.com` or `api.openai.com`
+/// is either misconfiguration or a MITM trying to walk off with the
+/// `x-api-key` / `Authorization` header on the followed request. With
+/// Policy::none() the response just surfaces as a non-200 to the caller.
+fn no_redirect_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn test_connection(provider: String) -> Result<String, String> {
     let key = read_key(&provider)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = no_redirect_client(15)?;
 
     match provider.as_str() {
         "anthropic" => {
@@ -249,6 +259,14 @@ pub struct QuickMemoOutput {
     pub source_excerpt: String,
 }
 
+// Max body size we'll read from a fetched URL. 5 MiB is generous for any
+// landing page / paper / blog post; anything bigger is almost certainly
+// either a malicious infinite stream or a misconfigured CDN dropping a
+// binary blob on us. Cap is enforced via bytes_stream loop, NOT via
+// post-buffering — so a 10 GB stream doesn't OOM the desktop app before
+// the limit check fires.
+const MAX_FETCH_BODY_BYTES: usize = 5 * 1024 * 1024;
+
 #[tauri::command]
 async fn fetch_url_text(url: String) -> Result<String, String> {
     // Pre-fetch full async validation (layers 1-3).
@@ -285,7 +303,25 @@ async fn fetch_url_text(url: String) -> Result<String, String> {
     if !res.status().is_success() {
         return Err(format!("HTTP {} from {}", res.status().as_u16(), url));
     }
-    let html = res.text().await.map_err(|e| e.to_string())?;
+
+    // Stream the body with a hard size cap to defuse 10 GB / infinite-stream
+    // OOM payloads. If the server sent a sane Content-Length header we
+    // could check it upfront, but a malicious server lies about that, so
+    // we enforce the cap on the actual bytes read instead.
+    use futures_util::StreamExt;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = res.bytes_stream();
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.map_err(|e| format!("Stream: {}", e))?;
+        if buf.len() + chunk.len() > MAX_FETCH_BODY_BYTES {
+            return Err(format!(
+                "Response body exceeded {} MB cap",
+                MAX_FETCH_BODY_BYTES / (1024 * 1024)
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let html = String::from_utf8_lossy(&buf);
     Ok(strip_html_naive(&html))
 }
 
@@ -486,14 +522,12 @@ async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
         safe_source
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = no_redirect_client(120)?;
 
     let memo = match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, &key, &user_prompt).await?,
         "openai" => call_openai_memo(&client, &key, &user_prompt).await?,
+        "local" => call_local_memo(&client, &user_prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
     };
 
@@ -771,10 +805,7 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
 
     let prompt = ic_section_prompt(&input.section, &source_text, &hints, &prior)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = no_redirect_client(120)?;
 
     let content = match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, &key, &prompt).await?,
@@ -799,6 +830,39 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
 const OLLAMA_DEFAULT_URL: &str = "http://localhost:11434";
 const OLLAMA_DEFAULT_MODEL: &str = "llama3.2";
 
+/// Strict allowlist for the Ollama base URL: localhost or a private LAN IP
+/// only. The point of option B (local model) is that NO content leaves the
+/// machine — so a base_url pointing at a remote attacker host would defeat
+/// the entire trust model. If a user genuinely runs Ollama on a remote box,
+/// they should SSH-tunnel it to localhost first.
+fn is_local_only_url(s: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(s).map_err(|e| format!("Invalid URL: {}", e))?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(format!("Disallowed scheme: {}", url.scheme()));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+    let host_lower = host.to_lowercase();
+    if host_lower == "localhost" {
+        return Ok(());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        let is_local = match ip {
+            IpAddr::V4(v4) => v4.is_loopback() || is_rfc1918(v4),
+            IpAddr::V6(v6) => v6.is_loopback() || is_unique_local_v6(v6),
+        };
+        if is_local {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "Local model URL must be on localhost or a private LAN IP (got {}). \
+         For a remote Ollama, set up an SSH tunnel to localhost first.",
+        host
+    ))
+}
+
 #[derive(Deserialize)]
 struct OllamaConfig {
     base_url: Option<String>,
@@ -821,8 +885,10 @@ fn read_ollama_config() -> OllamaConfig {
 
 #[tauri::command]
 async fn save_local_config(base_url: String, model: String) -> Result<(), String> {
+    let trimmed_url = base_url.trim();
+    is_local_only_url(trimmed_url)?;
     let cfg = serde_json::json!({
-        "base_url": base_url.trim(),
+        "base_url": trimmed_url,
         "model": model.trim(),
     });
     let entry = Entry::new(KEYRING_SERVICE, "local").map_err(|e| e.to_string())?;
@@ -839,10 +905,7 @@ async fn test_local_connection() -> Result<String, String> {
         .base_url
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| OLLAMA_DEFAULT_URL.to_string());
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = no_redirect_client(8)?;
     let url = format!("{}/api/tags", base.trim_end_matches('/'));
     let res = client
         .get(&url)
