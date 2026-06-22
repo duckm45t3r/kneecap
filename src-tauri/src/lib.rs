@@ -7,9 +7,100 @@
 
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 const KEYRING_SERVICE: &str = "capital.vhs.kneecap";
 const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai"];
+
+// ─── SSRF defence (4 layers) ─────────────────────────────────────────
+//
+// fetch_url_text accepts any URL the user pastes. Without validation the
+// command pivots into the host's LAN, AWS / GCP metadata service
+// (169.254.169.254), Ollama on localhost, or any unauth dev tool. We layer
+// four checks so each is a cheap independent kill-switch:
+//   1. Scheme allowlist (http / https only)
+//   2. Host literal blocklist (parses `localhost` etc.)
+//   3. DNS-resolved IP blocklist (catches attacker domains pointed at
+//      internal IPs — DNS rebinding only survives this layer if the
+//      attacker can re-rebind *between* the lookup and the connect, which
+//      is a much higher bar than just hosting a record)
+//   4. Redirect policy custom — every 3xx target re-checked through the
+//      sync portion of the same gates before reqwest follows.
+
+const BLOCKED_HOSTNAMES: &[&str] = &["localhost"];
+
+fn is_rfc1918(v4: Ipv4Addr) -> bool {
+    let o = v4.octets();
+    o[0] == 10
+        || (o[0] == 172 && (16..=31).contains(&o[1]))
+        || (o[0] == 192 && o[1] == 168)
+}
+
+fn is_unique_local_v6(v6: Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xfe00) == 0xfc00
+}
+
+fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()        // 127.0.0.0/8
+                || is_rfc1918(v4)   // 10/8, 172.16/12, 192.168/16
+                || v4.is_link_local() // 169.254/16 (incl AWS / Azure / GCP metadata)
+                || v4.is_unspecified() // 0.0.0.0
+                || v4.is_broadcast()   // 255.255.255.255
+                || v4.is_multicast()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()           // ::1
+                || v6.is_unspecified() // ::
+                || v6.is_multicast()
+                || is_unique_local_v6(v6) // fc00::/7
+        }
+    }
+}
+
+fn is_url_safe_sync(url: &reqwest::Url) -> Result<(), String> {
+    // Layer 1
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(format!("Disallowed scheme: {}", url.scheme()));
+    }
+    // Layer 2
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+    let host_lower = host.to_lowercase();
+    if BLOCKED_HOSTNAMES.iter().any(|h| *h == host_lower) {
+        return Err(format!("Disallowed host: {}", host));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_blocked_ip(ip) {
+            return Err(format!("Disallowed IP literal: {}", ip));
+        }
+    }
+    Ok(())
+}
+
+async fn validate_url(url_str: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
+    is_url_safe_sync(&url)?;
+    // Layer 3 — DNS resolve hostnames (skipped if already an IP literal)
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+    if host.parse::<IpAddr>().is_err() {
+        let port = url.port_or_known_default().unwrap_or(80);
+        let addrs = tokio::net::lookup_host(format!("{}:{}", host, port))
+            .await
+            .map_err(|e| format!("DNS resolution failed: {}", e))?;
+        for sock_addr in addrs {
+            let ip = sock_addr.ip();
+            if is_blocked_ip(ip) {
+                return Err(format!("Host {} resolves to blocked IP {}", host, ip));
+            }
+        }
+    }
+    Ok(())
+}
 
 // ─── API key storage (macOS Keychain) ────────────────────────────────
 
@@ -160,11 +251,32 @@ pub struct QuickMemoOutput {
 
 #[tauri::command]
 async fn fetch_url_text(url: String) -> Result<String, String> {
+    // Pre-fetch full async validation (layers 1-3).
+    validate_url(&url).await?;
+
+    // Layer 4 — every redirect target re-checked through the sync gates
+    // before reqwest follows. Custom policy is sync (can't DNS-resolve),
+    // so layer 3 is best-effort on redirects; pre-fetch caught the
+    // initial URL fully, and most SSRF payloads use literal IPs anyway.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .user_agent("KN33C4P/0.1 (https://vhs.capital)")
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            // stop() returns the 3xx response as-is; downstream
+            // `res.status().is_success()` check catches it as a non-200 and
+            // surfaces an HTTP error to the user — saves wrestling with
+            // Box<dyn Error> here while preserving the security gate.
+            if attempt.previous().len() >= 3 {
+                return attempt.stop();
+            }
+            if is_url_safe_sync(attempt.url()).is_err() {
+                return attempt.stop();
+            }
+            attempt.follow()
+        }))
         .build()
         .map_err(|e| e.to_string())?;
+
     let res = client
         .get(&url)
         .send()
