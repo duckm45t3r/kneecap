@@ -615,6 +615,19 @@ a:hover {
   line-height: 1.55;
 }
 
+/* ── Disclaimer banner (Quick Memo + IC Report) ───────────────────── */
+
+.kn-disclaimer {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.07);
+  border: 1px solid rgba(192, 80, 70, 0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0 0 18px;
+}
+
 /* ── Source picker (URL vs paste tab) ──────────────────────────────── */
 
 .kn-source {

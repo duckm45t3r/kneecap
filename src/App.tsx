@@ -644,6 +644,11 @@ function QuickMemo({
         round-trip.
       </p>
 
+      <div className="kn-disclaimer">
+        ⚠ Draft only — verify against the source before sharing or acting on it.
+        LLM output can be subtly wrong or steered by hostile pages.
+      </div>
+
       <ProviderPicker
         provider={provider}
         setProvider={setProvider}
@@ -794,6 +799,11 @@ function IcReport({
         Five passes: Founder → Market → Traction → Terms → Compile. Each pass
         sees the prior ones. About 30 minutes total.
       </p>
+
+      <div className="kn-disclaimer">
+        ⚠ Draft only — verify against the source before sharing or acting on it.
+        LLM output can be subtly wrong or steered by hostile pages.
+      </div>
 
       <ProviderPicker
         provider={provider}
