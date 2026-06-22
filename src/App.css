@@ -326,3 +326,270 @@ a:hover {
     transform: translate(-50%, 0);
   }
 }
+
+/* ── Inline link in Home hero (e.g. "Connect an LLM in Settings") ──── */
+
+.kn-inline-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--vhs-gold);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.kn-inline-link:hover {
+  color: var(--vhs-paper);
+}
+
+/* ── Disabled option (B / C placeholders) ──────────────────────────── */
+
+.kn-option--disabled {
+  opacity: 0.55;
+}
+
+.kn-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper-dim);
+  text-transform: none;
+}
+
+/* ── BYO key form ──────────────────────────────────────────────────── */
+
+.kn-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--vhs-hairline);
+}
+
+.kn-form-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.kn-label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-label--grow {
+  flex: 1;
+}
+
+.kn-input {
+  font: inherit;
+  font-size: 13.5px;
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.kn-input:focus {
+  border-color: var(--vhs-gold-dim);
+}
+
+.kn-input--select {
+  min-width: 140px;
+  cursor: pointer;
+}
+
+.kn-input--mono {
+  font-family: "JetBrains Mono", ui-monospace, "Menlo", monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
+
+.kn-input-wrap {
+  position: relative;
+}
+
+.kn-input-wrap .kn-input {
+  width: 100%;
+  padding-right: 60px;
+}
+
+.kn-eye-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  color: var(--vhs-paper-mute);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.kn-eye-btn:hover {
+  color: var(--vhs-paper);
+  background: var(--vhs-ink-4);
+}
+
+.kn-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.kn-btn {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.kn-btn:hover:not(:disabled) {
+  background: var(--vhs-ink-4);
+  border-color: var(--vhs-ink-4);
+}
+
+.kn-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.kn-btn--primary {
+  background: var(--vhs-gold);
+  color: var(--vhs-ink);
+  border-color: var(--vhs-gold);
+}
+
+.kn-btn--primary:hover:not(:disabled) {
+  background: var(--vhs-paper);
+  border-color: var(--vhs-paper);
+  color: var(--vhs-ink);
+}
+
+.kn-form-feedback {
+  margin-top: 10px;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+.kn-form-feedback--ok {
+  color: var(--vhs-teal);
+  background: rgba(61, 191, 174, 0.08);
+  border: 1px solid rgba(61, 191, 174, 0.3);
+}
+
+.kn-form-feedback--err {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.08);
+  border: 1px solid rgba(192, 80, 70, 0.3);
+}
+
+/* ── Connected provider list ───────────────────────────────────────── */
+
+.kn-key-list {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vhs-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-key-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.kn-key-name {
+  color: var(--vhs-paper);
+  font-weight: 600;
+  min-width: 90px;
+}
+
+.kn-key-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+}
+
+.kn-key-status--on {
+  color: var(--vhs-teal);
+}
+
+.kn-key-status--on::before {
+  content: "●";
+  font-size: 9px;
+}
+
+.kn-key-status--off {
+  color: var(--vhs-paper-faint);
+}
+
+.kn-key-status--off::before {
+  content: "○";
+  font-size: 9px;
+}
+
+.kn-link-btn {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
+}
+
+.kn-link-btn:hover {
+  color: var(--vhs-paper);
+  background: var(--vhs-ink-3);
+}
+
+.kn-link-btn--danger {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.08);
+  border: 1px solid rgba(192, 80, 70, 0.4);
+  padding: 2px 8px;
+  font-weight: 600;
+}
+
+.kn-link-btn--danger:hover {
+  color: var(--vhs-paper);
+  background: var(--vhs-crimson-dim);
+}
