@@ -593,3 +593,215 @@ a:hover {
   color: var(--vhs-paper);
   background: var(--vhs-crimson-dim);
 }
+
+/* ── Flow views (Quick Memo, IC Report) ─────────────────────────────── */
+
+.kn-flow {
+  max-width: 760px;
+}
+
+.kn-flow-title {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 30px;
+  font-weight: 500;
+  margin: 4px 0 6px;
+  color: var(--vhs-paper);
+}
+
+.kn-flow-sub {
+  font-size: 13.5px;
+  color: var(--vhs-paper-mute);
+  margin: 0 0 24px;
+  line-height: 1.55;
+}
+
+/* ── Source picker (URL vs paste tab) ──────────────────────────────── */
+
+.kn-source {
+  margin: 18px 0;
+}
+
+.kn-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--vhs-paper-mute);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px 8px;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.kn-tab:hover {
+  color: var(--vhs-paper);
+}
+
+.kn-tab--active {
+  color: var(--vhs-gold);
+  border-bottom-color: var(--vhs-gold);
+}
+
+.kn-input--textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+  font-family: "Inter", sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* ── Stepper (IC Report sections) ──────────────────────────────────── */
+
+.kn-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 24px 0 18px;
+  padding: 10px 14px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+}
+
+.kn-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--vhs-paper-mute);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kn-step:hover {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+}
+
+.kn-step--active {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-gold);
+}
+
+.kn-step--done .kn-step-dot {
+  background: var(--vhs-teal);
+}
+
+.kn-step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vhs-paper-faint);
+  display: inline-block;
+}
+
+.kn-step--active .kn-step-dot {
+  background: var(--vhs-gold);
+}
+
+.kn-section-edit {
+  margin-top: 8px;
+}
+
+/* ── Result blocks (memo output) ───────────────────────────────────── */
+
+.kn-result {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--vhs-hairline);
+}
+
+.kn-result-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--vhs-gold);
+  font-weight: 700;
+  margin: 0 0 10px;
+}
+
+.kn-prose {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--vhs-paper);
+  white-space: pre-wrap;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: "Inter", sans-serif;
+  margin: 0;
+}
+
+.kn-prose--muted {
+  color: var(--vhs-paper-mute);
+  font-size: 12.5px;
+  background: var(--vhs-ink);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  overflow-x: auto;
+}
+
+.kn-prose--editable {
+  width: 100%;
+  min-height: 280px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.kn-prose--editable:focus {
+  border-color: var(--vhs-gold-dim);
+}
+
+/* ── Collapsible (source excerpt) ──────────────────────────────────── */
+
+.kn-collapse {
+  margin-top: 16px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.kn-collapse summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--vhs-paper-mute);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  list-style: none;
+  user-select: none;
+}
+
+.kn-collapse summary::before {
+  content: "▸ ";
+  color: var(--vhs-gold);
+}
+
+.kn-collapse[open] summary::before {
+  content: "▾ ";
+}
+
+.kn-collapse pre {
+  margin: 10px 0 0;
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
