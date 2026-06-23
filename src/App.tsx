@@ -2,7 +2,42 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ChartRenderer, type ChartSpec } from "./ChartRenderer";
 import "./App.css";
+
+/**
+ * Shared markdown renderer with custom handling for fenced `chart` blocks
+ * (W3.2 R5). The LLM emits ```chart\n{...}\n``` and we swap it for the
+ * recharts-based <ChartRenderer/>. Used by both Quick Memo + IC Report.
+ */
+function MarkdownView({ source }: { source: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code({ className, children, ...props }) {
+          const isChart =
+            typeof className === "string" && className.includes("language-chart");
+          if (isChart) {
+            try {
+              const spec = JSON.parse(String(children).trim()) as ChartSpec;
+              return <ChartRenderer spec={spec} />;
+            } catch {
+              return <pre className="kn-chart-err">{String(children)}</pre>;
+            }
+          }
+          return (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          );
+        },
+      }}
+    >
+      {source}
+    </ReactMarkdown>
+  );
+}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -808,7 +843,7 @@ function QuickMemo({
           />
           <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
           <div className="kn-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{memo}</ReactMarkdown>
+            <MarkdownView source={memo} />
           </div>
         </div>
       )}
@@ -1063,9 +1098,7 @@ function IcReport({
             />
             <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
             <div className="kn-markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {sections[activeSection] ?? ""}
-              </ReactMarkdown>
+              <MarkdownView source={sections[activeSection] ?? ""} />
             </div>
           </div>
         )}

@@ -1038,3 +1038,28 @@ a:hover {
 .kn-flow-row .kn-label {
   flex: 1;
 }
+
+/* Chart MVP (W3.2 R5) */
+.kn-chart {
+  margin: 16px 0;
+  padding: 12px 14px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+}
+
+.kn-chart-title {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 15px;
+  color: var(--vhs-paper);
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.kn-chart-err {
+  font-size: 11px;
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.08);
+  padding: 6px 10px;
+  border-radius: 4px;
+}

@@ -1035,6 +1035,30 @@ fn ic_section_prompt(
             ## Round & Use of Funds\n\
             (from ROUND/TERMS section — preserve both sub-blocks)\n\
             \n\
+            ## Charts (R5)\n\
+            If the source has numeric data that visualises well, emit 1-3\n\
+            chart specs as fenced code blocks (language identifier: chart)\n\
+            with JSON inside. Example shape:\n\
+            \n\
+              ```chart\n\
+              {\"type\":\"bar\",\"title\":\"Revenue Q1-Q4\",\"data\":[\n\
+                {\"label\":\"Q1\",\"value\":34},\n\
+                {\"label\":\"Q2\",\"value\":52},\n\
+                {\"label\":\"Q3\",\"value\":68}\n\
+              ]}\n\
+              ```\n\
+            \n\
+            Supported types: bar / line / pie. Each data point object must\n\
+            have a string `label` and numeric `value`. Useful examples:\n\
+            - bar: quarterly revenue, customer count over time, round size\n\
+              vs comparables\n\
+            - line: growth trajectory, burn rate over months, headcount\n\
+              over quarters\n\
+            - pie: market share, use of funds breakdown, customer mix\n\
+            \n\
+            Only emit charts if source has actual numeric data. Do NOT\n\
+            fabricate numbers. Skip this block entirely if nothing chartable.\n\
+            \n\
             ## Comparables (A5)\n\
             3-5 recent comparable rounds at peer-sector companies. Format as\n\
             markdown table:\n\
