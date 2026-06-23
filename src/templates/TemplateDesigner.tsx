@@ -7,7 +7,16 @@ import type {
   BlockType,
   Template,
 } from "./types";
-import { BLOCK_TYPE_META, newBlock } from "./templateStore";
+import {
+  BLOCK_TYPE_META,
+  newBlock,
+  getFirmLogo,
+  setFirmLogo,
+  clearFirmLogo,
+  readLogoFile,
+  LOGO_ACCEPT,
+  type FirmLogo,
+} from "./templateStore";
 import { BlockView } from "./BlockView";
 
 const PALETTE: BlockType[] = [
@@ -43,8 +52,27 @@ export function TemplateDesigner({
   );
   const [dirty, setDirty] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [firmLogo, setFirmLogoState] = useState<FirmLogo | null>(() => getFirmLogo());
+  const [logoMsg, setLogoMsg] = useState<string | null>(null);
 
   const selected = draft.blocks.find((b) => b.id === selectedId) ?? null;
+
+  const onLogoFile = async (file: File | null) => {
+    if (!file) return;
+    setLogoMsg(null);
+    try {
+      const logo = await readLogoFile(file);
+      setFirmLogo(logo);
+      setFirmLogoState(logo);
+    } catch (e) {
+      setLogoMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const removeLogo = () => {
+    clearFirmLogo();
+    setFirmLogoState(null);
+  };
 
   const mutate = (next: Template) => {
     setDraft(next);
@@ -161,6 +189,27 @@ export function TemplateDesigner({
               ))}
             </select>
           </label>
+          <div className="kn-ed-side-label">Firm logo</div>
+          {firmLogo && (
+            <div className="kn-ed-logo-row">
+              <img src={firmLogo.dataUrl} alt="" className="kn-ed-logo-thumb" />
+              <span className="kn-ed-logo-name">{firmLogo.name}</span>
+              <button className="kn-link-btn" onClick={removeLogo}>
+                Remove
+              </button>
+            </div>
+          )}
+          <label className="kn-btn kn-ed-logo-upload">
+            <input
+              type="file"
+              accept={LOGO_ACCEPT}
+              style={{ display: "none" }}
+              onChange={(e) => onLogoFile(e.target.files?.[0] ?? null)}
+            />
+            {firmLogo ? "Replace logo…" : "Upload logo (PNG / SVG)…"}
+          </label>
+          {logoMsg && <div className="kn-ed-logo-msg">{logoMsg}</div>}
+
           <label className="kn-ed-check">
             <input
               type="checkbox"
@@ -213,7 +262,7 @@ export function TemplateDesigner({
                 </button>
               </div>
               <div className="kn-ed-block-body">
-                <BlockView block={b} />
+                <BlockView block={b} firmLogo={firmLogo} />
               </div>
             </div>
           ))}

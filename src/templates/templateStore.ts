@@ -48,6 +48,71 @@ export function deleteCustomTemplate(id: string): void {
   writeCustom(listCustomTemplates().filter((t) => t.id !== id));
 }
 
+// ─── Firm logo (app-level, shared across templates) ───────────────────
+//
+// Stored as a data URL so a single upload (PNG or SVG) follows the firm
+// across every template and generated report. Always rendered via <img>,
+// which neutralises any script embedded in an SVG.
+
+const LOGO_KEY = "kneecap_firm_logo";
+
+export type FirmLogo = { dataUrl: string; name: string };
+
+export function getFirmLogo(): FirmLogo | null {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(LOGO_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.dataUrl === "string" ? (parsed as FirmLogo) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setFirmLogo(logo: FirmLogo): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.setItem(LOGO_KEY, JSON.stringify(logo));
+}
+
+export function clearFirmLogo(): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.removeItem(LOGO_KEY);
+}
+
+// Accepts PNG or SVG; returns a full data URL (with the data: prefix intact,
+// unlike App's fileToBase64 which strips it for the PDF path).
+const LOGO_MAX_BYTES = 1024 * 1024;
+export const LOGO_ACCEPT = "image/png,image/svg+xml,.png,.svg";
+
+export function readLogoFile(file: File): Promise<FirmLogo> {
+  return new Promise((resolve, reject) => {
+    const okType =
+      file.type === "image/png" ||
+      file.type === "image/svg+xml" ||
+      /\.(png|svg)$/i.test(file.name);
+    if (!okType) {
+      reject(new Error("Use a PNG or SVG file."));
+      return;
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      reject(new Error("Logo is too large — keep it under ~1 MB (SVG is ideal)."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Could not read the file."));
+        return;
+      }
+      resolve({ dataUrl: result, name: file.name });
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 // ─── Factory helpers ──────────────────────────────────────────────────
 
 let idCounter = 0;

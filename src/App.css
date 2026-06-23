@@ -1377,16 +1377,18 @@ a:hover {
 
 /* ─── Templates hub action bar ──────────────────────────────────────── */
 
-.kn-tpl-bar {
+.kn-tpl-actionbar {
   display: flex;
   align-items: center;
   gap: 16px;
   margin: 0 0 14px;
+  width: 100%;
 }
 
-.kn-tpl-bar .kn-tpl-desc {
+.kn-tpl-actionbar .kn-tpl-desc {
   margin: 0;
   flex: 1;
+  min-width: 0;
 }
 
 .kn-tpl-actions {
@@ -1684,6 +1686,51 @@ a:hover {
 @keyframes kn-gen-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
+}
+
+/* ─── Firm logo (PNG / SVG upload) ──────────────────────────────────── */
+
+.kn-tpl-logo-img {
+  max-height: 52px;
+  max-width: 240px;
+  object-fit: contain;
+  display: block;
+}
+
+.kn-ed-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kn-ed-logo-thumb {
+  max-height: 30px;
+  max-width: 84px;
+  object-fit: contain;
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: var(--vhs-ink-3);
+}
+
+.kn-ed-logo-name {
+  flex: 1;
+  font-size: 11px;
+  color: var(--vhs-paper-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-ed-logo-upload {
+  justify-content: center;
+  cursor: pointer;
+}
+
+.kn-ed-logo-msg {
+  font-size: 11px;
+  color: var(--vhs-crimson);
+  line-height: 1.4;
 }
 
 .kn-chart-title {

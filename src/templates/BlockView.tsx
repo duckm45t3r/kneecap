@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Block, BlockAccent, BlockFont, BlockSize } from "./types";
+import type { FirmLogo } from "./templateStore";
 
 // Read-only renderer for one block. Used by the template gallery now, and by the
 // final document view / editor canvas later. Generated blocks render their
@@ -45,7 +46,13 @@ function ghost(prompt: string) {
   return <p className="kn-tpl-ghost">AI-generated · {prompt}</p>;
 }
 
-export function BlockView({ block }: { block: Block }) {
+export function BlockView({
+  block,
+  firmLogo,
+}: {
+  block: Block;
+  firmLogo?: FirmLogo | null;
+}) {
   const accent = block.style?.accent;
   const sample = block.sample;
   const prompt = block.content.mode === "generated" ? block.content.prompt : "";
@@ -54,7 +61,17 @@ export function BlockView({ block }: { block: Block }) {
 
   switch (block.type) {
     case "logo":
-      body = <div className="kn-tpl-logo">{block.content.mode === "static" ? block.content.text : "Firm logo"}</div>;
+      body = firmLogo ? (
+        <img
+          src={firmLogo.dataUrl}
+          alt={firmLogo.name || "Firm logo"}
+          className="kn-tpl-logo-img"
+        />
+      ) : (
+        <div className="kn-tpl-logo">
+          {block.content.mode === "static" ? block.content.text : "Firm logo"}
+        </div>
+      );
       break;
 
     case "divider":

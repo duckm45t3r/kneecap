@@ -11,6 +11,7 @@ import {
   duplicateTemplate,
   saveCustomTemplate,
   deleteCustomTemplate,
+  getFirmLogo,
 } from "./templates/templateStore";
 import type { Template } from "./templates/types";
 import "./App.css";
@@ -1458,6 +1459,7 @@ function TemplateGallery({
 
   const refresh = useCallback(() => setTemplates(getAllTemplates()), []);
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
+  const firmLogo = getFirmLogo();
 
   if (mode === "edit" && editDraft) {
     return (
@@ -1532,7 +1534,7 @@ function TemplateGallery({
 
       {selected && (
         <>
-          <div className="kn-tpl-bar">
+          <div className="kn-tpl-actionbar">
             <span className="kn-tpl-desc">{selected.description}</span>
             <div className="kn-tpl-actions">
               <button className="kn-btn kn-btn--primary" onClick={() => setMode("generate")}>
@@ -1551,7 +1553,7 @@ function TemplateGallery({
 
           <div className="kn-tpl-page">
             {selected.blocks.map((b) => (
-              <BlockView key={b.id} block={b} />
+              <BlockView key={b.id} block={b} firmLogo={firmLogo} />
             ))}
           </div>
         </>
@@ -1587,6 +1589,8 @@ function GenerateFromTemplate({
   const [err, setErr] = useState<string | null>(null);
 
   const genBlocks = template.blocks.filter((b) => b.content.mode === "generated");
+  const firmLogo = getFirmLogo();
+  const hasLogoBlock = template.blocks.some((b) => b.type === "logo");
 
   const canRun =
     configuredProviders.length > 0 &&
@@ -1744,6 +1748,14 @@ function GenerateFromTemplate({
         <div className="kn-result">
           <h3 className="kn-result-title">{template.name}</h3>
           <div className="kn-markdown">
+            {firmLogo && hasLogoBlock && (
+              <img
+                src={firmLogo.dataUrl}
+                alt=""
+                className="kn-tpl-logo-img"
+                style={{ marginBottom: 16 }}
+              />
+            )}
             <MarkdownView source={compiled} />
           </div>
         </div>
