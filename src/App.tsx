@@ -41,7 +41,7 @@ function MarkdownView({ source }: { source: string }) {
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-type View = "home" | "settings" | "quickmemo" | "icreport";
+type View = "home" | "settings" | "quickmemo" | "icreport" | "template-editor";
 type Provider = "anthropic" | "openai" | "gemini" | "local";
 
 type TestState =
@@ -109,6 +109,29 @@ const STAGE_LABELS: Record<Stage, string> = {
   "series-b": "Series B+ (scale econ)",
   growth: "Growth (exit math)",
 };
+
+/**
+ * W3.2 R7 — custom prompt persistence. User-edited prompts override the
+ * built-in template body in the backend. Stored per (template, section)
+ * pair so a user can customise simple-ic founder + full-memo + etc
+ * independently. Leaving the textarea blank removes the override.
+ */
+function customPromptKey(template: string, section: string): string {
+  return `kneecap_prompt_${template}_${section}`;
+}
+function getCustomPrompt(template: string, section: string): string {
+  if (typeof window === "undefined" || !window.localStorage) return "";
+  return window.localStorage.getItem(customPromptKey(template, section)) ?? "";
+}
+function setCustomPrompt(template: string, section: string, value: string): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  const trimmed = value.trim();
+  if (!trimmed) {
+    window.localStorage.removeItem(customPromptKey(template, section));
+  } else {
+    window.localStorage.setItem(customPromptKey(template, section), trimmed);
+  }
+}
 
 /**
  * Read a File as base64 (without the "data:...;base64," prefix). The Rust
@@ -203,6 +226,7 @@ function App() {
             configuredProviders={configuredProviders}
             refresh={refreshProviders}
             showToast={showToast}
+            onOpenTemplateEditor={() => setView("template-editor")}
           />
         )}
         {view === "quickmemo" && (
@@ -216,6 +240,12 @@ function App() {
           <IcReport
             onBack={() => setView("home")}
             configuredProviders={configuredProviders}
+            showToast={showToast}
+          />
+        )}
+        {view === "template-editor" && (
+          <TemplateEditor
+            onBack={() => setView("settings")}
             showToast={showToast}
           />
         )}
@@ -309,11 +339,13 @@ function Settings({
   configuredProviders,
   refresh,
   showToast,
+  onOpenTemplateEditor,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
+  onOpenTemplateEditor: () => void;
 }) {
   return (
     <div className="kn-settings">
@@ -345,10 +377,23 @@ function Settings({
       </section>
 
       <section className="kn-section">
+        <h3 className="kn-section-title">Template Editor (W3.2 R7)</h3>
+        <p className="kn-section-body">
+          Override the built-in prompt for any template / section combination.
+          Your customisations stay on this Mac (localStorage); empty fields
+          fall back to the default. Visual layout designer (logo / fonts /
+          drag-drop blocks per R3) lands in wave 3.3.
+        </p>
+        <button className="kn-btn kn-btn--primary" onClick={onOpenTemplateEditor}>
+          Open template editor →
+        </button>
+      </section>
+
+      <section className="kn-section">
         <h3 className="kn-section-title">Format Learning</h3>
         <p className="kn-section-body">
           Drop a few of your firm&apos;s past memos and KN33C4P picks up the
-          house format. Wiring up in W2.6.
+          house format. Wiring up in W3.3 alongside the layout designer.
         </p>
       </section>
 
@@ -723,6 +768,7 @@ function QuickMemo({
       if (mode === "pdf" && pdfFile) {
         pdfB64 = await fileToBase64(pdfFile);
       }
+      const override = getCustomPrompt(template, "memo");
       const out = await invoke<{ memo: string; source_excerpt: string }>("quick_memo", {
         input: {
           provider,
@@ -731,6 +777,7 @@ function QuickMemo({
           pdf_base64: pdfB64,
           note: note.trim() || null,
           template,
+          prompt_override: override || null,
         },
       });
       setMemo(out.memo);
@@ -904,6 +951,7 @@ function IcReport({
         pdfB64 = await fileToBase64(pdfFile);
       }
 
+      const override = getCustomPrompt(template, section);
       const out = await invoke<{ section: string; content: string }>("ic_report_section", {
         input: {
           provider,
@@ -915,6 +963,7 @@ function IcReport({
           prior_sections: prior,
           template,
           stage: stage || null,
+          prompt_override: override || null,
         },
       });
       setSections((cur) => ({ ...cur, [section]: out.content }));
@@ -1236,6 +1285,141 @@ function SourceInput({
 }
 
 // ─── Settings icon ────────────────────────────────────────────────────
+
+// ─── Template Editor (W3.2 R7) ─────────────────────────────────────────
+
+type EditableTemplate = MemoTemplate | IcTemplate;
+type EditableSection = "memo" | IcSection;
+
+const TEMPLATE_SECTIONS: Record<EditableTemplate, EditableSection[]> = {
+  "simple-memo": ["memo"],
+  "full-memo": ["memo"],
+  "simple-ic": ["founder", "market", "compile"],
+  "full-ic": ["founder", "market", "traction", "terms", "compile"],
+};
+
+const ALL_TEMPLATE_LABELS: Record<EditableTemplate, string> = {
+  ...MEMO_TEMPLATE_LABELS,
+  ...IC_TEMPLATE_LABELS,
+};
+
+const SECTION_LABELS: Record<EditableSection, string> = {
+  memo: "Memo body",
+  founder: "Founder & Team",
+  market: "Market",
+  traction: "Product & Traction",
+  terms: "Round & Terms",
+  compile: "Compiled Memo",
+};
+
+function TemplateEditor({
+  onBack,
+  showToast,
+}: {
+  onBack: () => void;
+  showToast: (m: string) => void;
+}) {
+  const [template, setTemplate] = useState<EditableTemplate>("simple-memo");
+  const [section, setSection] = useState<EditableSection>("memo");
+  const [draft, setDraft] = useState(() => getCustomPrompt("simple-memo", "memo"));
+
+  // Sync draft when template / section changes.
+  useEffect(() => {
+    setDraft(getCustomPrompt(template, section));
+  }, [template, section]);
+
+  // Reset section to first available when template changes.
+  useEffect(() => {
+    const sections = TEMPLATE_SECTIONS[template];
+    if (!sections.includes(section)) {
+      setSection(sections[0]);
+    }
+  }, [template, section]);
+
+  const sections = TEMPLATE_SECTIONS[template];
+  const hasOverride = getCustomPrompt(template, section).length > 0;
+
+  const handleSave = () => {
+    setCustomPrompt(template, section, draft);
+    showToast(
+      draft.trim() ? `Saved override for ${template} / ${section}` : `Cleared override for ${template} / ${section}`,
+    );
+  };
+
+  const handleReset = () => {
+    setCustomPrompt(template, section, "");
+    setDraft("");
+    showToast(`Reset ${template} / ${section} to default`);
+  };
+
+  return (
+    <div className="kn-flow">
+      <button className="kn-back" onClick={onBack}>
+        ← Back to Settings
+      </button>
+      <h2 className="kn-flow-title">Template Editor</h2>
+      <p className="kn-flow-sub">
+        Override the built-in prompt for any template / section combination.
+        Leave blank to use the default. The override replaces the structure
+        block; source / hints / prior_sections wiring stays intact.
+      </p>
+
+      <div className="kn-flow-row">
+        <label className="kn-label">
+          Template
+          <select
+            className="kn-input kn-input--select"
+            value={template}
+            onChange={(e) => setTemplate(e.target.value as EditableTemplate)}
+          >
+            {(Object.keys(ALL_TEMPLATE_LABELS) as EditableTemplate[]).map((t) => (
+              <option key={t} value={t}>
+                {ALL_TEMPLATE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="kn-label">
+          Section
+          <select
+            className="kn-input kn-input--select"
+            value={section}
+            onChange={(e) => setSection(e.target.value as EditableSection)}
+          >
+            {sections.map((s) => (
+              <option key={s} value={s}>
+                {SECTION_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <label className="kn-label kn-label--grow">
+        Custom prompt {hasOverride && <span className="kn-pill">override active</span>}
+        <textarea
+          className="kn-input kn-input--textarea"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Leave blank to use the built-in template prompt. When non-empty, this REPLACES the section body — the source, prior sections, hints, security warning, and stage guidance still wrap automatically."
+          rows={14}
+          spellCheck={false}
+        />
+      </label>
+
+      <div className="kn-form-actions" style={{ marginTop: 14 }}>
+        <button className="kn-btn kn-btn--primary" onClick={handleSave}>
+          Save override
+        </button>
+        {hasOverride && (
+          <button className="kn-btn" onClick={handleReset}>
+            Reset to default
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SettingsIcon() {
   return (
