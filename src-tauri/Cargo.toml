@@ -28,4 +28,8 @@ keyring = { version = "=3.6.3", features = ["apple-native"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tokio = { version = "=1.41.1", features = ["full"] }
 futures-util = { version = "=0.3.31", default-features = false }
+# Zero plaintext API keys from heap after use (audit I3). zeroize crate is
+# zero-dep and stable; the Zeroizing<String> wrapper drops bytes on Drop
+# instead of leaving them in heap for the next allocator.
+zeroize = { version = "=1.8.1", features = ["derive"] }
 

@@ -8,6 +8,7 @@
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "capital.vhs.kneecap";
 const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai"];
@@ -141,12 +142,19 @@ fn list_configured_providers() -> Vec<String> {
     out
 }
 
-fn read_key(provider: &str) -> Result<String, String> {
+/// Read an API key from the macOS Keychain wrapped in Zeroizing<String>
+/// (audit I3) — the buffer is overwritten on Drop so the plaintext key
+/// doesn't linger in heap once the calling future completes. Pass via
+/// `.as_str()` into HTTP headers / Bearer tokens; the wrapper derefs.
+fn read_key(provider: &str) -> Result<Zeroizing<String>, String> {
     let entry = Entry::new(KEYRING_SERVICE, provider).map_err(|e| e.to_string())?;
-    entry.get_password().map_err(|e| match e {
-        keyring::Error::NoEntry => "No key on file".to_string(),
-        other => other.to_string(),
-    })
+    entry
+        .get_password()
+        .map(Zeroizing::new)
+        .map_err(|e| match e {
+            keyring::Error::NoEntry => "No key on file".to_string(),
+            other => other.to_string(),
+        })
 }
 
 // ─── Connection test (real API call, 8-token hello) ──────────────────
@@ -194,7 +202,7 @@ async fn test_connection(provider: String) -> Result<String, String> {
             };
             let res = client
                 .post("https://api.anthropic.com/v1/messages")
-                .header("x-api-key", &key)
+                .header("x-api-key", key.as_str())
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body)
@@ -214,7 +222,7 @@ async fn test_connection(provider: String) -> Result<String, String> {
             };
             let res = client
                 .post("https://api.openai.com/v1/chat/completions")
-                .bearer_auth(&key)
+                .bearer_auth(key.as_str())
                 .header("content-type", "application/json")
                 .json(&body)
                 .send()
@@ -232,7 +240,14 @@ async fn handle_test_response(res: reqwest::Response) -> Result<String, String> 
         Ok("ok".to_string())
     } else {
         let body = res.text().await.unwrap_or_default();
-        let trimmed: String = body.chars().take(240).collect();
+        // Cap at 80 chars + strip control characters so upstream API error
+        // bodies (which sometimes echo request snippets) don't bloat the
+        // toast and don't carry newlines that break log formatting.
+        let trimmed: String = body
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+            .take(80)
+            .collect();
         Err(format!("HTTP {}: {}", status.as_u16(), trimmed))
     }
 }
@@ -525,8 +540,8 @@ async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
     let client = no_redirect_client(120)?;
 
     let memo = match input.provider.as_str() {
-        "anthropic" => call_anthropic_memo(&client, &key, &user_prompt).await?,
-        "openai" => call_openai_memo(&client, &key, &user_prompt).await?,
+        "anthropic" => call_anthropic_memo(&client, key.as_str(), &user_prompt).await?,
+        "openai" => call_openai_memo(&client, key.as_str(), &user_prompt).await?,
         "local" => call_local_memo(&client, &user_prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
     };
@@ -574,7 +589,11 @@ async fn call_anthropic_memo(
         return Err(format!(
             "HTTP {}: {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            body
+                .chars()
+                .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+                .take(80)
+                .collect::<String>()
         ));
     }
     let parsed: AnthropicReply = res.json().await.map_err(|e| e.to_string())?;
@@ -630,7 +649,11 @@ async fn call_openai_memo(
         return Err(format!(
             "HTTP {}: {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            body
+                .chars()
+                .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+                .take(80)
+                .collect::<String>()
         ));
     }
     let parsed: OpenAiReply = res.json().await.map_err(|e| e.to_string())?;
@@ -795,21 +818,35 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
     };
 
     let hints = input.hints.as_deref().unwrap_or("").trim().to_string();
-    let prior = input
-        .prior_sections
-        .unwrap_or_default()
-        .iter()
-        .map(|s| format!("[{}]\n{}", s.section.to_uppercase(), s.content))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+
+    // Cap each prior section AND the cumulative concatenation. A user could
+    // hand-edit prior_section content in the React textarea (or a future
+    // compromised renderer could) and stuff arbitrary content into the
+    // prompt context. 8000 chars per section + 24000 cumulative is well
+    // beyond what an honest section ever needs (~2800 chars per the prompt
+    // template) but inside Sonnet's context budget.
+    const PER_SECTION_CAP: usize = 8_000;
+    const CUMULATIVE_CAP: usize = 24_000;
+    let mut prior_chunks: Vec<String> = Vec::new();
+    let mut cumulative = 0usize;
+    for s in input.prior_sections.unwrap_or_default() {
+        let section_text: String = s.content.chars().take(PER_SECTION_CAP).collect();
+        let chunk = format!("[{}]\n{}", s.section.to_uppercase(), section_text);
+        if cumulative + chunk.len() > CUMULATIVE_CAP {
+            break;
+        }
+        cumulative += chunk.len();
+        prior_chunks.push(chunk);
+    }
+    let prior = prior_chunks.join("\n\n");
 
     let prompt = ic_section_prompt(&input.section, &source_text, &hints, &prior)?;
 
     let client = no_redirect_client(120)?;
 
     let content = match input.provider.as_str() {
-        "anthropic" => call_anthropic_memo(&client, &key, &prompt).await?,
-        "openai" => call_openai_memo(&client, &key, &prompt).await?,
+        "anthropic" => call_anthropic_memo(&client, key.as_str(), &prompt).await?,
+        "openai" => call_openai_memo(&client, key.as_str(), &prompt).await?,
         "local" => call_local_memo(&client, &prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
     };
@@ -957,7 +994,11 @@ async fn call_local_memo(client: &reqwest::Client, user_prompt: &str) -> Result<
         return Err(format!(
             "Local HTTP {}: {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            body
+                .chars()
+                .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+                .take(80)
+                .collect::<String>()
         ));
     }
     let parsed: OllamaReply = res.json().await.map_err(|e| e.to_string())?;
