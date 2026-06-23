@@ -818,3 +818,211 @@ a:hover {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ─── UI polish batch 2026-06-23 ────────────────────────────────────── */
+
+/* Fix #1 — BYO key form: Provider select narrower, key input bigger */
+
+.kn-form-row .kn-label:first-child .kn-input--select {
+  min-width: 110px;
+  max-width: 130px;
+}
+
+.kn-input--mono {
+  font-size: 13.5px;
+}
+
+/* Fix #2 — disabled "locked" option (C VHS-hosted): cursor + interactive */
+
+.kn-option--locked {
+  cursor: not-allowed;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.kn-option--locked:hover {
+  background: var(--vhs-ink-3);
+}
+
+/* Fix #4 — IC Report stepper: numbered dots + connecting lines */
+
+.kn-step-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+.kn-step-connector {
+  width: 18px;
+  height: 2px;
+  background: var(--vhs-paper-faint);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.kn-step-connector--done {
+  background: var(--vhs-teal);
+}
+
+.kn-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--vhs-ink-4);
+  color: var(--vhs-paper-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  flex-shrink: 0;
+}
+
+.kn-step--done .kn-step-num {
+  background: var(--vhs-teal);
+  color: var(--vhs-ink);
+}
+
+.kn-step--active .kn-step-num {
+  background: var(--vhs-gold);
+  color: var(--vhs-ink);
+  box-shadow: 0 0 0 3px rgba(212, 183, 106, 0.2);
+}
+
+.kn-step-label {
+  margin-left: 6px;
+}
+
+/* The original .kn-step-dot from W1 is unused now — keep for back-compat. */
+
+/* Fix #5 — markdown render below raw textarea */
+
+.kn-result-title--secondary {
+  margin-top: 16px;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-markdown {
+  padding: 16px 18px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  font-family: "Inter", sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--vhs-paper);
+}
+
+.kn-markdown h1,
+.kn-markdown h2,
+.kn-markdown h3 {
+  font-family: "Cormorant Garamond", serif;
+  color: var(--vhs-paper);
+  margin: 18px 0 8px;
+}
+
+.kn-markdown h1 { font-size: 22px; font-weight: 600; }
+.kn-markdown h2 { font-size: 19px; font-weight: 600; }
+.kn-markdown h3 { font-size: 17px; font-weight: 600; }
+
+.kn-markdown h1:first-child,
+.kn-markdown h2:first-child,
+.kn-markdown h3:first-child {
+  margin-top: 0;
+}
+
+.kn-markdown p {
+  margin: 0 0 12px;
+}
+
+.kn-markdown ul,
+.kn-markdown ol {
+  margin: 0 0 12px;
+  padding-left: 24px;
+}
+
+.kn-markdown li {
+  margin-bottom: 4px;
+}
+
+.kn-markdown strong {
+  color: var(--vhs-paper);
+  font-weight: 700;
+}
+
+.kn-markdown em {
+  color: var(--vhs-paper);
+  font-style: italic;
+}
+
+.kn-markdown code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  background: var(--vhs-ink-3);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--vhs-gold);
+}
+
+.kn-markdown pre {
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  margin: 0 0 12px;
+}
+
+.kn-markdown pre code {
+  background: transparent;
+  padding: 0;
+  color: var(--vhs-paper);
+}
+
+.kn-markdown a {
+  color: var(--vhs-gold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.kn-markdown blockquote {
+  border-left: 3px solid var(--vhs-gold-dim);
+  padding-left: 14px;
+  margin: 0 0 12px;
+  color: var(--vhs-paper-dim);
+  font-style: italic;
+}
+
+.kn-markdown table {
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.kn-markdown th,
+.kn-markdown td {
+  border: 1px solid var(--vhs-hairline);
+  padding: 6px 10px;
+}
+
+.kn-markdown th {
+  background: var(--vhs-ink-3);
+  font-weight: 600;
+}
+
+.kn-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--vhs-hairline);
+  margin: 18px 0;
+}
+
+/* Fix #6 — footer status: prevent layout-break with multi-provider strings */
+
+.kn-status {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./App.css";
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -10,7 +12,7 @@ type Provider = "anthropic" | "openai" | "local";
 type TestState =
   | { kind: "idle" }
   | { kind: "testing" }
-  | { kind: "ok"; provider: Provider }
+  | { kind: "ok"; provider: Provider; latencyMs: number }
   | { kind: "error"; provider: Provider; message: string };
 
 const PROVIDER_LABELS: Record<Provider, string> = {
@@ -65,14 +67,10 @@ function App() {
 
   const hasAnyKey = configuredProviders.length > 0;
   const headerSubtitle = useMemo(() => {
-    const cloud = configuredProviders.filter((p) => p !== "local");
-    const hasLocal = configuredProviders.includes("local");
-    if (cloud.length === 0 && !hasLocal) return null;
-    const parts = [
-      ...cloud.map((p) => PROVIDER_LABELS[p]),
-      ...(hasLocal ? [PROVIDER_LABELS.local] : []),
-    ];
-    return `${parts.join(" · ")} connected`;
+    const n = configuredProviders.length;
+    if (n === 0) return null;
+    if (n === 1) return `${PROVIDER_LABELS[configuredProviders[0]]} connected`;
+    return `${n} providers connected`;
   }, [configuredProviders]);
 
   return (
@@ -250,7 +248,7 @@ function Settings({
           showToast={showToast}
         />
 
-        <VhsHostedOption />
+        <VhsHostedOption showToast={showToast} />
       </section>
 
       <section className="kn-section">
@@ -313,9 +311,10 @@ function ByoKeyOption({
 
   const handleTest = async () => {
     setTest({ kind: "testing" });
+    const start = Date.now();
     try {
       await invoke<string>("test_connection", { provider });
-      setTest({ kind: "ok", provider });
+      setTest({ kind: "ok", provider, latencyMs: Date.now() - start });
     } catch (e) {
       setTest({ kind: "error", provider, message: String(e) });
     }
@@ -409,7 +408,7 @@ function ByoKeyOption({
 
         {test.kind === "ok" && (
           <div className="kn-form-feedback kn-form-feedback--ok">
-            ✓ {PROVIDER_LABELS[test.provider]} responded
+            ✓ {PROVIDER_LABELS[test.provider]} API authenticated · {test.latencyMs} ms
           </div>
         )}
         {test.kind === "error" && (
@@ -477,9 +476,10 @@ function LocalModelOption({
 
   const handleTest = async () => {
     setTest({ kind: "testing" });
+    const start = Date.now();
     try {
       await invoke<string>("test_local_connection");
-      setTest({ kind: "ok", provider: "local" });
+      setTest({ kind: "ok", provider: "local", latencyMs: Date.now() - start });
     } catch (e) {
       setTest({ kind: "error", provider: "local", message: String(e) });
     }
@@ -541,7 +541,9 @@ function LocalModelOption({
         </div>
 
         {test.kind === "ok" && (
-          <div className="kn-form-feedback kn-form-feedback--ok">✓ Ollama responded</div>
+          <div className="kn-form-feedback kn-form-feedback--ok">
+            ✓ Ollama reachable · {test.latencyMs} ms
+          </div>
         )}
         {test.kind === "error" && (
           <div className="kn-form-feedback kn-form-feedback--err">✗ {test.message}</div>
@@ -562,9 +564,16 @@ function LocalModelOption({
 
 // ─── VHS-hosted option (C — server-side not deployed) ─────────────────
 
-function VhsHostedOption() {
+function VhsHostedOption({ showToast }: { showToast: (m: string) => void }) {
   return (
-    <div className="kn-option kn-option--disabled">
+    <div
+      className="kn-option kn-option--disabled kn-option--locked"
+      onClick={() =>
+        showToast("VHS-hosted billing endpoint ships in W2.5 — use A or B for now")
+      }
+      role="button"
+      aria-disabled="true"
+    >
       <div className="kn-option-title">
         <span className="kn-tag">C</span> VHS-hosted
         <span className="kn-pill">Billing endpoint W2.5</span>
@@ -701,13 +710,17 @@ function QuickMemo({
 
       {memo && (
         <div className="kn-result">
-          <h3 className="kn-result-title">Memo</h3>
+          <h3 className="kn-result-title">Memo · raw</h3>
           <textarea
             className="kn-prose kn-prose--editable"
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
             spellCheck={false}
           />
+          <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
+          <div className="kn-markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{memo}</ReactMarkdown>
+          </div>
         </div>
       )}
     </div>
@@ -821,18 +834,31 @@ function IcReport({
       />
 
       <div className="kn-stepper">
-        {IC_SECTIONS.map((s) => (
-          <button
-            key={s}
-            className={`kn-step ${activeSection === s ? "kn-step--active" : ""} ${
-              sections[s] ? "kn-step--done" : ""
-            }`}
-            onClick={() => setActiveSection(s)}
-          >
-            <span className="kn-step-dot" />
-            {IC_LABELS[s]}
-          </button>
-        ))}
+        {IC_SECTIONS.map((s, idx) => {
+          const isDone = !!sections[s];
+          const isActive = activeSection === s;
+          const prevDone = idx > 0 && !!sections[IC_SECTIONS[idx - 1]];
+          return (
+            <span key={s} className="kn-step-wrap">
+              {idx > 0 && (
+                <span
+                  className={`kn-step-connector ${
+                    prevDone ? "kn-step-connector--done" : ""
+                  }`}
+                />
+              )}
+              <button
+                className={`kn-step ${isActive ? "kn-step--active" : ""} ${
+                  isDone ? "kn-step--done" : ""
+                }`}
+                onClick={() => setActiveSection(s)}
+              >
+                <span className="kn-step-num">{isDone ? "✓" : idx + 1}</span>
+                <span className="kn-step-label">{IC_LABELS[s]}</span>
+              </button>
+            </span>
+          );
+        })}
       </div>
 
       <div className="kn-section-edit">
@@ -880,7 +906,7 @@ function IcReport({
 
         {sections[activeSection] !== undefined && (
           <div className="kn-result">
-            <h3 className="kn-result-title">{IC_LABELS[activeSection]}</h3>
+            <h3 className="kn-result-title">{IC_LABELS[activeSection]} · raw</h3>
             <textarea
               className="kn-prose kn-prose--editable"
               value={sections[activeSection] ?? ""}
@@ -889,6 +915,12 @@ function IcReport({
               }
               spellCheck={false}
             />
+            <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
+            <div className="kn-markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {sections[activeSection] ?? ""}
+              </ReactMarkdown>
+            </div>
           </div>
         )}
       </div>
