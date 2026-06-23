@@ -3,6 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChartRenderer, type ChartSpec } from "./ChartRenderer";
+import { BlockView } from "./templates/BlockView";
+import { TemplateDesigner } from "./templates/TemplateDesigner";
+import {
+  getAllTemplates,
+  isStarter,
+  duplicateTemplate,
+  saveCustomTemplate,
+  deleteCustomTemplate,
+} from "./templates/templateStore";
+import type { Template } from "./templates/types";
 import "./App.css";
 
 /**
@@ -41,7 +51,7 @@ function MarkdownView({ source }: { source: string }) {
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-type View = "home" | "settings" | "quickmemo" | "icreport" | "template-editor";
+type View = "home" | "settings" | "quickmemo" | "icreport" | "template-editor" | "templates";
 type Provider = "anthropic" | "openai" | "gemini" | "local";
 
 type TestState =
@@ -211,6 +221,7 @@ function App() {
           <Home
             hasAnyKey={hasAnyKey}
             onOpenSettings={() => setView("settings")}
+            onOpenTemplates={() => setView("templates")}
             onPick={(target) => {
               if (!hasAnyKey) {
                 showToast("Connect an LLM in Settings first");
@@ -249,6 +260,13 @@ function App() {
             showToast={showToast}
           />
         )}
+        {view === "templates" && (
+          <TemplateGallery
+            onBack={() => setView("home")}
+            configuredProviders={configuredProviders}
+            showToast={showToast}
+          />
+        )}
       </main>
 
       <footer className="kn-footer">
@@ -277,10 +295,12 @@ function Home({
   hasAnyKey,
   onPick,
   onOpenSettings,
+  onOpenTemplates,
 }: {
   hasAnyKey: boolean;
   onPick: (target: View) => void;
   onOpenSettings: () => void;
+  onOpenTemplates: () => void;
 }) {
   return (
     <div className="kn-home">
@@ -318,15 +338,14 @@ function Home({
           </div>
         </button>
 
-        <div className="kn-card kn-card--ghost" aria-disabled="true">
-          <div className="kn-card-emoji" style={{ opacity: 0.4 }}>·</div>
-          <div className="kn-card-title" style={{ opacity: 0.6 }}>
-            More tools coming
+        <button className="kn-card kn-card--wide" onClick={onOpenTemplates}>
+          <div className="kn-card-emoji">▦</div>
+          <div className="kn-card-title">Report templates</div>
+          <div className="kn-card-body">
+            Browse the simple and full layouts your reports are built from. Each
+            is a stack of blocks — soon drag-and-drop editable.
           </div>
-          <div className="kn-card-body" style={{ opacity: 0.55 }}>
-            Format learning, voice training, batch screening.
-          </div>
-        </div>
+        </button>
       </div>
     </div>
   );
@@ -1417,6 +1436,318 @@ function TemplateEditor({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Templates hub (wave 3.3 — browse / edit / generate) ──────────────
+
+function TemplateGallery({
+  onBack,
+  configuredProviders,
+  showToast,
+}: {
+  onBack: () => void;
+  configuredProviders: Provider[];
+  showToast: (m: string) => void;
+}) {
+  const [mode, setMode] = useState<"browse" | "edit" | "generate">("browse");
+  const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
+  const [selectedId, setSelectedId] = useState<string>(templates[0]?.id ?? "");
+  const [editDraft, setEditDraft] = useState<Template | null>(null);
+
+  const refresh = useCallback(() => setTemplates(getAllTemplates()), []);
+  const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
+
+  if (mode === "edit" && editDraft) {
+    return (
+      <TemplateDesigner
+        initial={editDraft}
+        onSave={(t) => {
+          saveCustomTemplate(t);
+          refresh();
+          setSelectedId(t.id);
+          showToast("Template saved");
+        }}
+        onClose={() => {
+          setMode("browse");
+          refresh();
+        }}
+      />
+    );
+  }
+
+  if (mode === "generate" && selected) {
+    return (
+      <GenerateFromTemplate
+        template={selected}
+        configuredProviders={configuredProviders}
+        showToast={showToast}
+        onClose={() => setMode("browse")}
+      />
+    );
+  }
+
+  const openEdit = () => {
+    if (!selected) return;
+    setEditDraft(isStarter(selected.id) ? duplicateTemplate(selected) : selected);
+    setMode("edit");
+  };
+
+  const handleDelete = () => {
+    if (!selected) return;
+    deleteCustomTemplate(selected.id);
+    const next = getAllTemplates();
+    setTemplates(next);
+    setSelectedId(next[0]?.id ?? "");
+    showToast("Template deleted");
+  };
+
+  return (
+    <div className="kn-flow">
+      <button className="kn-back" onClick={onBack}>
+        ← Back
+      </button>
+      <h2 className="kn-flow-title">Report templates</h2>
+      <p className="kn-flow-sub">
+        Every report is built from blocks — each block holds its own layout,
+        style, and the prompt that fills it. Browse a layout, edit it, or
+        generate a report from it.
+      </p>
+
+      <div className="kn-tpl-tabs">
+        {templates.map((t) => (
+          <button
+            key={t.id}
+            className={`kn-tpl-tab ${t.id === selectedId ? "kn-tpl-tab--active" : ""}`}
+            onClick={() => setSelectedId(t.id)}
+          >
+            <span className="kn-tpl-tab-name">{t.name}</span>
+            <span className="kn-tpl-tab-meta">
+              {isStarter(t.id) ? "starter" : "custom"} · {t.blocks.length} blocks
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {selected && (
+        <>
+          <div className="kn-tpl-bar">
+            <span className="kn-tpl-desc">{selected.description}</span>
+            <div className="kn-tpl-actions">
+              <button className="kn-btn kn-btn--primary" onClick={() => setMode("generate")}>
+                Generate a report
+              </button>
+              <button className="kn-btn" onClick={openEdit}>
+                {isStarter(selected.id) ? "Duplicate & edit" : "Edit"}
+              </button>
+              {!isStarter(selected.id) && (
+                <button className="kn-btn" onClick={handleDelete}>
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="kn-tpl-page">
+            {selected.blocks.map((b) => (
+              <BlockView key={b.id} block={b} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Generate a report from a template (walks the blocks) ─────────────
+
+function GenerateFromTemplate({
+  template,
+  configuredProviders,
+  showToast,
+  onClose,
+}: {
+  template: Template;
+  configuredProviders: Provider[];
+  showToast: (m: string) => void;
+  onClose: () => void;
+}) {
+  const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
+  const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
+  const [mode, setMode] = useState<SourceMode>("url");
+  const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [note, setNote] = useState("");
+  const [running, setRunning] = useState(false);
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [compiled, setCompiled] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const genBlocks = template.blocks.filter((b) => b.content.mode === "generated");
+
+  const canRun =
+    configuredProviders.length > 0 &&
+    !running &&
+    (mode === "url"
+      ? url.trim().length > 0
+      : mode === "text"
+        ? text.trim().length > 0
+        : pdfFile !== null);
+
+  const compile = (resById: Record<string, string>): string =>
+    template.blocks
+      .map((b) => {
+        if (b.content.mode === "static") {
+          if (b.type === "divider") return "---";
+          if (b.type === "logo") return "";
+          return b.content.text;
+        }
+        const c = (resById[b.id] ?? "").trim();
+        if (!c) return "";
+        if (b.type === "heading" || b.type === "cover") return `# ${c}`;
+        return `## ${b.label}\n\n${c}`;
+      })
+      .filter((s) => s.trim().length > 0)
+      .join("\n\n");
+
+  const handleRun = async () => {
+    setRunning(true);
+    setErr(null);
+    setResults({});
+    setCompiled(null);
+    try {
+      let pdfB64: string | null = null;
+      if (mode === "pdf" && pdfFile) pdfB64 = await fileToBase64(pdfFile);
+      const sourceText = await invoke<string>("gather_source", {
+        url: mode === "url" ? url.trim() : null,
+        seedText: mode === "text" ? text.trim() : null,
+        pdfBase64: pdfB64,
+      });
+
+      const acc: Record<string, string> = {};
+      let prior = "";
+      for (const b of genBlocks) {
+        if (b.content.mode !== "generated") continue;
+        setRunningId(b.id);
+        const content = await invoke<string>("generate_block", {
+          input: {
+            provider,
+            source_text: sourceText,
+            prompt: b.content.prompt,
+            prior_context: prior || null,
+            note: note.trim() || null,
+          },
+        });
+        acc[b.id] = content;
+        setResults({ ...acc });
+        prior += `## ${b.label}\n${content.slice(0, 300)}\n\n`;
+      }
+      setRunningId(null);
+      setCompiled(compile(acc));
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setRunning(false);
+      setRunningId(null);
+    }
+  };
+
+  const handleCopy = () => {
+    if (!compiled) return;
+    navigator.clipboard.writeText(compiled);
+    showToast("Report copied");
+  };
+
+  return (
+    <div className="kn-flow">
+      <button className="kn-back" onClick={onClose}>
+        ← Back to templates
+      </button>
+      <h2 className="kn-flow-title">Generate · {template.name}</h2>
+      <p className="kn-flow-sub">
+        {genBlocks.length} sections will be written from your source, one block
+        at a time.
+      </p>
+
+      <div className="kn-disclaimer">
+        ⚠ Draft only — verify against the source before sharing or acting on it.
+        LLM output can be subtly wrong or steered by hostile pages.
+      </div>
+
+      <div className="kn-flow-row">
+        <ProviderPicker
+          provider={provider}
+          setProvider={setProvider}
+          configuredProviders={configuredProviders}
+        />
+      </div>
+
+      <SourceInput
+        mode={mode}
+        setMode={setMode}
+        url={url}
+        setUrl={setUrl}
+        text={text}
+        setText={setText}
+        pdfFile={pdfFile}
+        setPdfFile={setPdfFile}
+      />
+
+      <label className="kn-label kn-label--grow">
+        Note for the reader (optional)
+        <input
+          type="text"
+          className="kn-input"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="things the source doesn't say"
+        />
+      </label>
+
+      <div className="kn-form-actions" style={{ marginTop: 18 }}>
+        <button className="kn-btn kn-btn--primary" onClick={handleRun} disabled={!canRun}>
+          {running ? "Generating…" : "Generate report"}
+        </button>
+        {compiled && (
+          <button className="kn-btn" onClick={handleCopy}>
+            Copy report
+          </button>
+        )}
+      </div>
+
+      {err && <div className="kn-form-feedback kn-form-feedback--err">✗ {err}</div>}
+
+      {(running || Object.keys(results).length > 0) && (
+        <div className="kn-gen-progress">
+          {genBlocks.map((b) => {
+            const state =
+              results[b.id] !== undefined
+                ? "done"
+                : runningId === b.id
+                  ? "run"
+                  : "wait";
+            return (
+              <div key={b.id} className={`kn-gen-step kn-gen-step--${state}`}>
+                <span className="kn-gen-dot" />
+                {b.label}
+                {state === "run" && <span className="kn-gen-run"> · drafting…</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {compiled && (
+        <div className="kn-result">
+          <h3 className="kn-result-title">{template.name}</h3>
+          <div className="kn-markdown">
+            <MarkdownView source={compiled} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
