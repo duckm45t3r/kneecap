@@ -1026,3 +1026,15 @@ a:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Flow row: provider + template side-by-side (W3.1b R6) */
+.kn-flow-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 14px;
+  align-items: flex-start;
+}
+
+.kn-flow-row .kn-label {
+  flex: 1;
+}

@@ -41,6 +41,26 @@ const IC_LABELS: Record<IcSection, string> = {
 
 type IcSectionResult = { section: IcSection; content: string };
 
+// ─── Templates (W3 R6) ───────────────────────────────────────────────
+
+type MemoTemplate = "simple-memo" | "full-memo";
+type IcTemplate = "simple-ic" | "full-ic";
+
+const MEMO_TEMPLATE_LABELS: Record<MemoTemplate, string> = {
+  "simple-memo": "Simple memo (1-pager bullets)",
+  "full-memo": "Full memo (2-page structured)",
+};
+
+const IC_TEMPLATE_LABELS: Record<IcTemplate, string> = {
+  "simple-ic": "Simple IC (3 sections)",
+  "full-ic": "Full IC (5 sections + sub-blocks)",
+};
+
+const IC_SECTIONS_BY_TEMPLATE: Record<IcTemplate, IcSection[]> = {
+  "simple-ic": ["founder", "market", "compile"],
+  "full-ic": ["founder", "market", "traction", "terms", "compile"],
+};
+
 /**
  * Read a File as base64 (without the "data:...;base64," prefix). The Rust
  * backend pdf-extract takes the raw base64 string. Used by Quick Memo + IC
@@ -624,6 +644,7 @@ function QuickMemo({
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
+  const [template, setTemplate] = useState<MemoTemplate>("simple-memo");
   const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
@@ -660,6 +681,7 @@ function QuickMemo({
           seed_text: mode === "text" ? text.trim() : null,
           pdf_base64: pdfB64,
           note: note.trim() || null,
+          template,
         },
       });
       setMemo(out.memo);
@@ -693,11 +715,27 @@ function QuickMemo({
         LLM output can be subtly wrong or steered by hostile pages.
       </div>
 
-      <ProviderPicker
-        provider={provider}
-        setProvider={setProvider}
-        configuredProviders={configuredProviders}
-      />
+      <div className="kn-flow-row">
+        <ProviderPicker
+          provider={provider}
+          setProvider={setProvider}
+          configuredProviders={configuredProviders}
+        />
+        <label className="kn-label">
+          Template
+          <select
+            className="kn-input kn-input--select"
+            value={template}
+            onChange={(e) => setTemplate(e.target.value as MemoTemplate)}
+          >
+            {(Object.keys(MEMO_TEMPLATE_LABELS) as MemoTemplate[]).map((t) => (
+              <option key={t} value={t}>
+                {MEMO_TEMPLATE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <SourceInput
         mode={mode}
@@ -777,6 +815,7 @@ function IcReport({
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
+  const [template, setTemplate] = useState<IcTemplate>("simple-ic");
   const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
@@ -792,6 +831,15 @@ function IcReport({
   const [running, setRunning] = useState<IcSection | null>(null);
   const [activeSection, setActiveSection] = useState<IcSection>("founder");
   const [err, setErr] = useState<string | null>(null);
+
+  // Sections exposed in this template's stepper. Switching templates resets
+  // activeSection if it's no longer in scope (e.g. simple-ic drops traction).
+  const activeSections = IC_SECTIONS_BY_TEMPLATE[template];
+  useEffect(() => {
+    if (!activeSections.includes(activeSection)) {
+      setActiveSection(activeSections[0]);
+    }
+  }, [activeSections, activeSection]);
 
   const runSection = async (section: IcSection) => {
     setRunning(section);
@@ -815,12 +863,13 @@ function IcReport({
           pdf_base64: pdfB64,
           hints: hints[section] || null,
           prior_sections: prior,
+          template,
         },
       });
       setSections((cur) => ({ ...cur, [section]: out.content }));
-      const idx = IC_SECTIONS.indexOf(section);
-      if (idx >= 0 && idx < IC_SECTIONS.length - 1) {
-        setActiveSection(IC_SECTIONS[idx + 1]);
+      const idx = activeSections.indexOf(section);
+      if (idx >= 0 && idx < activeSections.length - 1) {
+        setActiveSection(activeSections[idx + 1]);
       }
     } catch (e) {
       setErr(String(e));
@@ -833,9 +882,11 @@ function IcReport({
     if (running) return false;
     if (configuredProviders.length === 0) return false;
     if (s === "compile") {
-      return (["founder", "market", "traction", "terms"] as IcSection[]).every(
-        (sec) => !!sections[sec]
-      );
+      // Compile requires all NON-compile sections in the current template to
+      // have content. simple-ic only needs founder+market; full-ic needs all 4.
+      return activeSections
+        .filter((sec) => sec !== "compile")
+        .every((sec) => !!sections[sec]);
     }
     if (mode === "url") return url.trim().length > 0;
     if (mode === "text") return text.trim().length > 0;
@@ -855,8 +906,9 @@ function IcReport({
       </button>
       <h2 className="kn-flow-title">Full IC Report</h2>
       <p className="kn-flow-sub">
-        Five passes: Founder → Market → Traction → Terms → Compile. Each pass
-        sees the prior ones. About 30 minutes total.
+        {template === "simple-ic"
+          ? "3 passes: Founder → Market → Compile. ~10 minutes."
+          : "5 passes: Founder → Market → Traction → Terms → Compile. ~30 minutes."}
       </p>
 
       <div className="kn-disclaimer">
@@ -864,11 +916,27 @@ function IcReport({
         LLM output can be subtly wrong or steered by hostile pages.
       </div>
 
-      <ProviderPicker
-        provider={provider}
-        setProvider={setProvider}
-        configuredProviders={configuredProviders}
-      />
+      <div className="kn-flow-row">
+        <ProviderPicker
+          provider={provider}
+          setProvider={setProvider}
+          configuredProviders={configuredProviders}
+        />
+        <label className="kn-label">
+          Template
+          <select
+            className="kn-input kn-input--select"
+            value={template}
+            onChange={(e) => setTemplate(e.target.value as IcTemplate)}
+          >
+            {(Object.keys(IC_TEMPLATE_LABELS) as IcTemplate[]).map((t) => (
+              <option key={t} value={t}>
+                {IC_TEMPLATE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <SourceInput
         mode={mode}
@@ -882,10 +950,10 @@ function IcReport({
       />
 
       <div className="kn-stepper">
-        {IC_SECTIONS.map((s, idx) => {
+        {activeSections.map((s, idx) => {
           const isDone = !!sections[s];
           const isActive = activeSection === s;
-          const prevDone = idx > 0 && !!sections[IC_SECTIONS[idx - 1]];
+          const prevDone = idx > 0 && !!sections[activeSections[idx - 1]];
           return (
             <span key={s} className="kn-step-wrap">
               {idx > 0 && (
