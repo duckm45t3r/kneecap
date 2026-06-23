@@ -974,7 +974,7 @@ fn ic_section_prompt(
             - No conditional gates / no unit econ table at this template level\n\
               (use full-ic for the deeper output).\n",
         "compile" => "Section: COMPILED MEMO\n\
-            Fold the four prior sections into a single ~2-3 page memo:\n\
+            Fold the four prior sections into a single ~3-4 page memo:\n\
             \n\
             ## Snapshot\n\
             One paragraph: what they do, why it's interesting, what's open.\n\
@@ -991,6 +991,15 @@ fn ic_section_prompt(
             ## Round & Use of Funds\n\
             (from ROUND/TERMS section — preserve both sub-blocks)\n\
             \n\
+            ## Comparables (A5)\n\
+            3-5 recent comparable rounds at peer-sector companies. Format as\n\
+            markdown table:\n\
+            | Company | Stage | Round size | Valuation | Date | Lead |\n\
+            |---|---|---|---|---|---|\n\
+            If the source doesn't have comp data, write a one-line note:\n\
+            'No comps disclosed — recommend looking up via Crunchbase /\n\
+            Pitchbook before next call' (don't fabricate comp rows).\n\
+            \n\
             ## Recommendation (with conditional gates)\n\
             Output EXACTLY one verdict from this set: PASS / WATCH / TAKE\n\
             THE CALL.\n\
@@ -1005,11 +1014,29 @@ fn ic_section_prompt(
               revenue achievement crosses 60%').\n\
             Format these as bullet lines under '**Conditional gates:**'.\n\
             \n\
+            ## Pre-mortem (A6)\n\
+            Assume 5 years from now this investment failed. List 3 plausible\n\
+            failure scenarios, ordered by likelihood. This is a forcing\n\
+            function for risk thinking — not a prediction. Each scenario:\n\
+            1-2 sentences naming the failure mode and what would have caused\n\
+            it. Examples of scenarios: market never materialised / founder\n\
+            burned out / competitor leapfrogged / unit economics never\n\
+            converged / regulatory shock killed the model.\n\
+            \n\
+            ## Next steps (A8 — only if WATCH or TAKE THE CALL)\n\
+            - Generate a PROBE ledger-verifiable rider from the conditional\n\
+              gates above: https://vhs.capital/tools/probe\n\
+            - PROBE's 3-indicator dashboard (revenue achievement / customer\n\
+              count / burn rate) tracks whether the gates were met without\n\
+              forcing the founder to share the full ledger.\n\
+            - Suggest the founder review the rider before signing the term\n\
+              sheet so the gates are mutual not adversarial.\n\
+            \n\
             Rules:\n\
             - Tighten language. Cut filler. Active voice.\n\
             - Do not invent facts that weren't in the prior sections.\n\
-            - Conditional gates language mirrors the PROBE ledger-verifiable\n\
-              rider — use concrete numeric triggers, not vague 'when ready'.\n",
+            - Conditional gates language mirrors the PROBE rider — use\n\
+              concrete numeric triggers, not vague 'when ready'.\n",
         other => return Err(format!("Unknown section: {}", other)),
     };
 
