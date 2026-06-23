@@ -61,6 +61,20 @@ const IC_SECTIONS_BY_TEMPLATE: Record<IcTemplate, IcSection[]> = {
   "full-ic": ["founder", "market", "traction", "terms", "compile"],
 };
 
+// ─── Stage (W3.2 A7) ─────────────────────────────────────────────────
+// Optional stage selector — when set, prepends stage-specific guidance to
+// every section prompt so the LLM emphasises the right metrics for that
+// round shape (e.g. pre-seed: team thesis; growth: exit math).
+type Stage = "" | "pre-seed" | "seed" | "series-a" | "series-b" | "growth";
+const STAGE_LABELS: Record<Stage, string> = {
+  "": "(any stage)",
+  "pre-seed": "Pre-seed (team + thesis)",
+  seed: "Seed (early PMF)",
+  "series-a": "Series A (PMF + GTM)",
+  "series-b": "Series B+ (scale econ)",
+  growth: "Growth (exit math)",
+};
+
 /**
  * Read a File as base64 (without the "data:...;base64," prefix). The Rust
  * backend pdf-extract takes the raw base64 string. Used by Quick Memo + IC
@@ -816,6 +830,7 @@ function IcReport({
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
   const [template, setTemplate] = useState<IcTemplate>("simple-ic");
+  const [stage, setStage] = useState<Stage>("");
   const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
@@ -864,6 +879,7 @@ function IcReport({
           hints: hints[section] || null,
           prior_sections: prior,
           template,
+          stage: stage || null,
         },
       });
       setSections((cur) => ({ ...cur, [section]: out.content }));
@@ -932,6 +948,20 @@ function IcReport({
             {(Object.keys(IC_TEMPLATE_LABELS) as IcTemplate[]).map((t) => (
               <option key={t} value={t}>
                 {IC_TEMPLATE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="kn-label">
+          Stage
+          <select
+            className="kn-input kn-input--select"
+            value={stage}
+            onChange={(e) => setStage(e.target.value as Stage)}
+          >
+            {(Object.keys(STAGE_LABELS) as Stage[]).map((s) => (
+              <option key={s} value={s}>
+                {STAGE_LABELS[s]}
               </option>
             ))}
           </select>

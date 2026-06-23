@@ -852,9 +852,49 @@ pub struct IcReportInput {
     pub hints: Option<String>,
     pub prior_sections: Option<Vec<IcPriorSection>>,
     /// "simple-ic" | "full-ic". Defaults to full-ic when absent.
-    /// simple-ic exposes only founder + market + compile (3 sections);
-    /// full-ic exposes all 5 with the A1-A4 sub-blocks (current behavior).
     pub template: Option<String>,
+    /// Optional stage (A7): "pre-seed" | "seed" | "series-a" | "series-b" |
+    /// "growth". Prepends stage-specific guidance to every section prompt
+    /// so the LLM emphasises the right metrics for that round shape.
+    pub stage: Option<String>,
+}
+
+fn stage_guidance(stage: &str) -> Option<&'static str> {
+    match stage {
+        "pre-seed" => Some(
+            "STAGE: PRE-SEED. Team thesis + market hunch is the deal. PMF \
+            metrics may not exist yet — that's OK. Focus on founder \
+            credibility, thesis sharpness, and prior wedge. Unit economics \
+            and detailed traction are NOT expected at this stage; mark \
+            'not applicable at pre-seed' if asked.",
+        ),
+        "seed" => Some(
+            "STAGE: SEED. Early PMF signal. Expect 5-10 paying customers OR \
+            named pilot conversions; unit economics still hand-wavy. \
+            Cohort retention only available for 1-2 cohorts. Look for \
+            evidence the founder can describe their wedge with precision.",
+        ),
+        "series-a" => Some(
+            "STAGE: SERIES A. PMF must be demonstrated. Look for repeatable \
+            GTM motion, CAC payback < 18 months, cohort retention curves \
+            that flatten above 50% at month 6. NRR > 100% for SaaS. \
+            Founder must show scale plan, not just product plan.",
+        ),
+        "series-b" => Some(
+            "STAGE: SERIES B+. Scale economics matter. Gross margin > 60% \
+            for SaaS, Rule of 40 (growth% + margin% >= 40), NRR > 110% \
+            for product-led growth, > 100% for sales-led. Market \
+            dominance trajectory + clear path to category leadership.",
+        ),
+        "growth" => Some(
+            "STAGE: GROWTH. Exit math is the deal. Compute MOIC + IRR \
+            scenarios from current valuation to plausible exit at 5-10x \
+            in 5-7 years. Public-comp valuation sanity check (NTM revenue \
+            multiple band). Cash-flow positive within 24 months OR clear \
+            financing runway to IPO/strategic.",
+        ),
+        _ => None,
+    }
 }
 
 #[derive(Serialize)]
@@ -866,6 +906,7 @@ pub struct IcReportOutput {
 fn ic_section_prompt(
     section: &str,
     template: &str,
+    stage: &str,
     source: &str,
     hints: &str,
     prior: &str,
@@ -875,6 +916,9 @@ fn ic_section_prompt(
     } else {
         prior.to_string()
     };
+    let stage_block = stage_guidance(stage)
+        .map(|s| format!("\n{}\n\n", s))
+        .unwrap_or_default();
     let hints_block = if hints.is_empty() { "(none)" } else { hints };
     let is_simple = template == "simple-ic";
 
@@ -1043,7 +1087,7 @@ fn ic_section_prompt(
     let safe_source = neutralise_source_tags(source);
     Ok(format!(
         "You are co-authoring an investor memo for VHS, a deep-tech focused VC.\n\
-        \n\
+        {}\
         {}\n\
         Reader's hints: {}\n\
         \n\
@@ -1059,7 +1103,7 @@ fn ic_section_prompt(
         <source>\n{}\n</source>\n\
         \n\
         Output the section content only. No section heading line. No preamble.",
-        body, hints_block, context_block, safe_source
+        stage_block, body, hints_block, context_block, safe_source
     ))
 }
 
@@ -1104,7 +1148,8 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
     let prior = prior_chunks.join("\n\n");
 
     let template = input.template.as_deref().unwrap_or("full-ic");
-    let prompt = ic_section_prompt(&input.section, template, &source_text, &hints, &prior)?;
+    let stage = input.stage.as_deref().unwrap_or("");
+    let prompt = ic_section_prompt(&input.section, template, stage, &source_text, &hints, &prior)?;
 
     let client = no_redirect_client(120)?;
 
