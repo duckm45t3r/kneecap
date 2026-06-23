@@ -32,4 +32,9 @@ futures-util = { version = "=0.3.31", default-features = false }
 # zero-dep and stable; the Zeroizing<String> wrapper drops bytes on Drop
 # instead of leaving them in heap for the next allocator.
 zeroize = { version = "=1.8.1", features = ["derive"] }
+# PDF text extraction for Quick Memo PDF upload (W3 R1). Pure Rust, no
+# external deps; handles text-based PDFs. Scanned / image-only PDFs need
+# OCR — out of scope for now (we error gracefully on empty extract).
+pdf-extract = "=0.7.7"
+base64 = "=0.22.1"
 

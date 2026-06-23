@@ -5,13 +5,14 @@
 // W2.2: URL fetch + Quick Memo single-shot LLM call.
 // W2.3+: Full IC Report multi-step, format learning, local model, VHS-hosted.
 
+use base64::Engine;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "capital.vhs.kneecap";
-const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai"];
+const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai", "gemini"];
 
 // ─── SSRF defence (4 layers) ─────────────────────────────────────────
 //
@@ -230,6 +231,28 @@ async fn test_connection(provider: String) -> Result<String, String> {
                 .map_err(|e| format!("Network: {}", e))?;
             handle_test_response(res).await
         }
+        "gemini" => {
+            // Gemini API doesn't take the key in a header — it goes in the
+            // ?key= query param. Request shape is its own ({contents: [{parts: [{text: ...}]}]}).
+            let body = serde_json::json!({
+                "contents": [{
+                    "parts": [{"text": "Reply with the single word: ok"}]
+                }],
+                "generationConfig": {"maxOutputTokens": 8}
+            });
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={}",
+                key.as_str()
+            );
+            let res = client
+                .post(&url)
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Network: {}", e))?;
+            handle_test_response(res).await
+        }
         other => Err(format!("Unknown provider: {}", other)),
     }
 }
@@ -261,9 +284,11 @@ async fn handle_test_response(res: reqwest::Response) -> Result<String, String> 
 #[derive(Deserialize)]
 pub struct QuickMemoInput {
     pub provider: String,
-    /// Either a URL (we fetch + extract text) or raw text the user pasted in.
+    /// Either a URL (we fetch + extract text), raw pasted text, or a
+    /// base64-encoded PDF (we extract text via pdf-extract).
     pub url: Option<String>,
     pub seed_text: Option<String>,
+    pub pdf_base64: Option<String>,
     /// Free-form: "company name", "industry", "what you care about".
     pub note: Option<String>,
 }
@@ -492,17 +517,50 @@ fn neutralise_source_tags(s: &str) -> String {
         .replace("<source>", "<-source-blocked->")
 }
 
+/// Extract text from a base64-encoded PDF (W3 R1 Quick Memo upload path).
+/// Frontend reads the user-picked file with FileReader.readAsDataURL,
+/// strips the `data:application/pdf;base64,` prefix, and passes the rest
+/// to quick_memo as `pdf_base64`. Pure-Rust pdf-extract handles text PDFs;
+/// scanned / image-only PDFs return empty text and we error gracefully.
+fn extract_pdf_text_from_base64(b64: &str) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("Invalid base64: {}", e))?;
+    if bytes.len() > MAX_FETCH_BODY_BYTES {
+        return Err(format!(
+            "PDF too large (max {} MB)",
+            MAX_FETCH_BODY_BYTES / (1024 * 1024)
+        ));
+    }
+    let text = pdf_extract::extract_text_from_mem(&bytes)
+        .map_err(|e| format!("PDF parse error: {}", e))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "PDF has no extractable text — scanned / image-only PDFs need OCR (not supported yet)".to_string(),
+        );
+    }
+    // Same 32k cap as strip_html_naive so prompt budget stays predictable.
+    if trimmed.chars().count() > 32_000 {
+        Ok(trimmed.chars().take(32_000).collect())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
 #[tauri::command]
 async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
     let key = read_key(&input.provider)?;
 
-    // 1. Gather source text — either fetched from URL or user paste.
+    // 1. Gather source text — URL fetch, pasted text, or PDF extract.
     let source_text = if let Some(url) = input.url.as_ref().filter(|u| !u.trim().is_empty()) {
         fetch_url_text(url.clone()).await?
     } else if let Some(seed) = input.seed_text.as_ref().filter(|s| !s.trim().is_empty()) {
         seed.clone()
+    } else if let Some(pdf_b64) = input.pdf_base64.as_ref().filter(|p| !p.trim().is_empty()) {
+        extract_pdf_text_from_base64(pdf_b64)?
     } else {
-        return Err("Need a URL or pasted text".to_string());
+        return Err("Need a URL, pasted text, or PDF".to_string());
     };
 
     let excerpt: String = source_text.chars().take(600).collect();
@@ -542,6 +600,7 @@ async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
     let memo = match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, key.as_str(), &user_prompt).await?,
         "openai" => call_openai_memo(&client, key.as_str(), &user_prompt).await?,
+        "gemini" => call_gemini_memo(&client, key.as_str(), &user_prompt).await?,
         "local" => call_local_memo(&client, &user_prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
     };
@@ -669,6 +728,81 @@ async fn call_openai_memo(
     Ok(text)
 }
 
+// ─── Gemini (W3 R2) ──────────────────────────────────────────────────
+//
+// Google's API takes the key in a ?key= query param (not a header),
+// and has its own request / response shape rooted in "contents":[{"parts":[{"text":...}]}].
+
+#[derive(Deserialize)]
+struct GeminiPart {
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GeminiContent {
+    parts: Option<Vec<GeminiPart>>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiContent>,
+}
+
+#[derive(Deserialize)]
+struct GeminiReply {
+    candidates: Option<Vec<GeminiCandidate>>,
+}
+
+async fn call_gemini_memo(
+    client: &reqwest::Client,
+    key: &str,
+    user_prompt: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "generationConfig": {"maxOutputTokens": 2000}
+    });
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={}",
+        key
+    );
+    let res = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body
+                .chars()
+                .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+                .take(80)
+                .collect::<String>()
+        ));
+    }
+    let parsed: GeminiReply = res.json().await.map_err(|e| e.to_string())?;
+    let text = parsed
+        .candidates
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| c.content)
+        .filter_map(|c| c.parts)
+        .flatten()
+        .filter_map(|p| p.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err("Empty response from Gemini".to_string());
+    }
+    Ok(text)
+}
+
 // ─── Full IC Report (W2.3) ───────────────────────────────────────────
 //
 // Section-by-section LLM authoring. Five passes total:
@@ -693,6 +827,7 @@ pub struct IcReportInput {
     pub section: String,
     pub url: Option<String>,
     pub seed_text: Option<String>,
+    pub pdf_base64: Option<String>,
     pub hints: Option<String>,
     pub prior_sections: Option<Vec<IcPriorSection>>,
 }
@@ -734,25 +869,53 @@ fn ic_section_prompt(
             - Size envelope (TAM / SAM if explicit; otherwise estimate band\n\
               and label it as such).\n\
             - The riskiest assumption about market.\n",
-        "traction" => "Section: PRODUCT & TRACTION\n\
-            Write 4-6 bullets on product + traction.\n\
+        "traction" => "Section: PRODUCT & TRACTION + UNIT ECONOMICS + RISKS\n\
+            Three sub-blocks. Write each as a small heading + 2-4 bullets.\n\
+            \n\
+            ### Product & traction\n\
             - What ships today (feature, not roadmap).\n\
             - Customers / users (named if disclosed; counts if not).\n\
             - Growth signal (revenue, retention, usage) — only what's stated;\n\
               flag anything claimed without evidence.\n\
-            - What's still vapor.\n",
-        "terms" => "Section: ROUND & TERMS\n\
-            Write 3-5 bullets on the round shape.\n\
-            - Round size, valuation, structure (SAFE / priced) — only if\n\
-              disclosed.\n\
-            - Lead / co-investors already in.\n\
-            - Use of funds.\n\
+            - What's still vapor.\n\
+            \n\
+            ### Unit economics\n\
+            Pull whatever's visible. For each metric: VALUE if in source,\n\
+            else 'not disclosed'. Don't invent.\n\
+            - CAC (customer acquisition cost) — band\n\
+            - LTV (lifetime value) — band\n\
+            - LTV:CAC ratio — flag if < 3:1 (under-monetised) or > 5:1\n\
+              (under-investing in growth)\n\
+            - Payback period (months)\n\
+            - Gross margin %\n\
+            - For B2B SaaS, also: NRR / GRR if stated\n\
+            \n\
+            ### Risks (named + severity + mitigation)\n\
+            2-3 explicit risks. Format per line:\n\
+            - RISK [H/M/L]: what could go wrong — mitigation if visible, or\n\
+              'TBD' if not.\n\
+            Force-function: writing 'mitigation: TBD' is fine, it tells the\n\
+            partner what to ask in the next call.\n",
+        "terms" => "Section: ROUND & TERMS + USE OF FUNDS\n\
+            Two sub-blocks. Use 'TBD' aggressively if not in source —\n\
+            'TBD' is a question for the next call, not a guess.\n\
+            \n\
+            ### Round shape\n\
+            - Size + valuation + structure (SAFE / J-KISS / priced) — only\n\
+              if disclosed.\n\
+            - Lead + co-investors already in.\n\
+            - Closing timeline / urgency.\n\
             - The ask of THIS partner (check size, board, intro).\n\
-            - If terms aren't in the source, write 'TBD' and list what to\n\
-              ask in the next call.\n",
+            \n\
+            ### Use of funds breakdown\n\
+            Try to back out percentage allocation from anything visible:\n\
+            - R&D / engineering: __%\n\
+            - GTM / sales & marketing: __%\n\
+            - Hires (name roles if disclosed): __%\n\
+            - Working capital / other: __%\n\
+            If not stated at all, list as 'TBD — ask in call'.\n",
         "compile" => "Section: COMPILED MEMO\n\
-            Fold the four prior sections (FOUNDER, MARKET, PRODUCT/TRACTION,\n\
-            ROUND/TERMS) into a single ~2-page memo:\n\
+            Fold the four prior sections into a single ~2-3 page memo:\n\
             \n\
             ## Snapshot\n\
             One paragraph: what they do, why it's interesting, what's open.\n\
@@ -763,19 +926,31 @@ fn ic_section_prompt(
             ## Market\n\
             (from MARKET section)\n\
             \n\
-            ## Product & Traction\n\
-            (from PRODUCT/TRACTION section)\n\
+            ## Product, Traction, Unit Economics & Risks\n\
+            (from PRODUCT/TRACTION section — preserve the three sub-blocks)\n\
             \n\
-            ## Round\n\
-            (from ROUND/TERMS section)\n\
+            ## Round & Use of Funds\n\
+            (from ROUND/TERMS section — preserve both sub-blocks)\n\
             \n\
-            ## Recommendation\n\
-            One of: PASS / WATCH / TAKE THE CALL. Two sentences why, naming\n\
-            the single most important open question.\n\
+            ## Recommendation (with conditional gates)\n\
+            Output EXACTLY one verdict from this set: PASS / WATCH / TAKE\n\
+            THE CALL.\n\
+            Then 2-3 sentences naming WHY.\n\
+            Then a 'Conditional gates' block:\n\
+            - If WATCH or TAKE THE CALL, list 2-3 specific triggers that\n\
+              would move the verdict forward (e.g. 'INVEST conditional on:\n\
+              (1) signed LOI converts to paid pilot by Q2, (2) CAC payback\n\
+              demonstrates < 18 months on next 10 customers').\n\
+            - If PASS, list 1-2 specific triggers that would warrant\n\
+              reopening (e.g. 'Reopen if: (1) named lead emerges, (2)\n\
+              revenue achievement crosses 60%').\n\
+            Format these as bullet lines under '**Conditional gates:**'.\n\
             \n\
             Rules:\n\
             - Tighten language. Cut filler. Active voice.\n\
-            - Do not invent facts that weren't in the prior sections.\n",
+            - Do not invent facts that weren't in the prior sections.\n\
+            - Conditional gates language mirrors the PROBE ledger-verifiable\n\
+              rider — use concrete numeric triggers, not vague 'when ready'.\n",
         other => return Err(format!("Unknown section: {}", other)),
     };
 
@@ -810,11 +985,13 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
         fetch_url_text(url.clone()).await?
     } else if let Some(seed) = input.seed_text.as_ref().filter(|s| !s.trim().is_empty()) {
         seed.clone()
+    } else if let Some(pdf_b64) = input.pdf_base64.as_ref().filter(|p| !p.trim().is_empty()) {
+        extract_pdf_text_from_base64(pdf_b64)?
     } else if input.section == "compile" {
         // 'compile' can run with prior sections only.
         String::new()
     } else {
-        return Err("Need a URL or pasted source text".to_string());
+        return Err("Need a URL, pasted text, or PDF".to_string());
     };
 
     let hints = input.hints.as_deref().unwrap_or("").trim().to_string();
@@ -847,6 +1024,7 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
     let content = match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, key.as_str(), &prompt).await?,
         "openai" => call_openai_memo(&client, key.as_str(), &prompt).await?,
+        "gemini" => call_gemini_memo(&client, key.as_str(), &prompt).await?,
         "local" => call_local_memo(&client, &prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
     };

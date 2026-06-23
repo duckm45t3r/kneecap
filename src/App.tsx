@@ -5,7 +5,7 @@ import "./App.css";
 // ─── Types ────────────────────────────────────────────────────────────
 
 type View = "home" | "settings" | "quickmemo" | "icreport";
-type Provider = "anthropic" | "openai" | "local";
+type Provider = "anthropic" | "openai" | "gemini" | "local";
 
 type TestState =
   | { kind: "idle" }
@@ -16,12 +16,14 @@ type TestState =
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
+  gemini: "Gemini",
   local: "Local (Ollama)",
 };
 
 const PROVIDER_HINTS: Record<Exclude<Provider, "local">, string> = {
   anthropic: "sk-ant-...",
   openai: "sk-...",
+  gemini: "AIza...",
 };
 
 const IC_SECTIONS = ["founder", "market", "traction", "terms", "compile"] as const;
@@ -36,6 +38,28 @@ const IC_LABELS: Record<IcSection, string> = {
 };
 
 type IcSectionResult = { section: IcSection; content: string };
+
+/**
+ * Read a File as base64 (without the "data:...;base64," prefix). The Rust
+ * backend pdf-extract takes the raw base64 string. Used by Quick Memo + IC
+ * Report PDF upload paths (W3 R1).
+ */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("FileReader returned non-string"));
+        return;
+      }
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 // ─── App shell ────────────────────────────────────────────────────────
 
@@ -362,6 +386,7 @@ function ByoKeyOption({
             >
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
             </select>
           </label>
 
@@ -418,7 +443,7 @@ function ByoKeyOption({
       </div>
 
       <div className="kn-key-list">
-        {(["anthropic", "openai"] as const).map((p) => (
+        {(["anthropic", "openai", "gemini"] as const).map((p) => (
           <div key={p} className="kn-key-row">
             <span className="kn-key-name">{PROVIDER_LABELS[p]}</span>
             {configuredProviders.includes(p) ? (
@@ -590,9 +615,10 @@ function QuickMemo({
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
-  const [mode, setMode] = useState<"url" | "text">("url");
+  const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [note, setNote] = useState("");
   const [running, setRunning] = useState(false);
   const [memo, setMemo] = useState<string | null>(null);
@@ -602,7 +628,11 @@ function QuickMemo({
   const canSubmit =
     configuredProviders.length > 0 &&
     !running &&
-    (mode === "url" ? url.trim().length > 0 : text.trim().length > 0);
+    (mode === "url"
+      ? url.trim().length > 0
+      : mode === "text"
+        ? text.trim().length > 0
+        : pdfFile !== null);
 
   const handleRun = async () => {
     setRunning(true);
@@ -610,11 +640,16 @@ function QuickMemo({
     setExcerpt(null);
     setErr(null);
     try {
+      let pdfB64: string | null = null;
+      if (mode === "pdf" && pdfFile) {
+        pdfB64 = await fileToBase64(pdfFile);
+      }
       const out = await invoke<{ memo: string; source_excerpt: string }>("quick_memo", {
         input: {
           provider,
           url: mode === "url" ? url.trim() : null,
           seed_text: mode === "text" ? text.trim() : null,
+          pdf_base64: pdfB64,
           note: note.trim() || null,
         },
       });
@@ -662,6 +697,8 @@ function QuickMemo({
         setUrl={setUrl}
         text={text}
         setText={setText}
+        pdfFile={pdfFile}
+        setPdfFile={setPdfFile}
       />
 
       <label className="kn-label kn-label--grow">
@@ -727,9 +764,10 @@ function IcReport({
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
-  const [mode, setMode] = useState<"url" | "text">("url");
+  const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [hints, setHints] = useState<Record<IcSection, string>>({
     founder: "",
     market: "",
@@ -750,12 +788,18 @@ function IcReport({
         (s) => s !== "compile" && s !== section && sections[s]
       ).map((s) => ({ section: s, content: sections[s]! }));
 
+      let pdfB64: string | null = null;
+      if (mode === "pdf" && pdfFile) {
+        pdfB64 = await fileToBase64(pdfFile);
+      }
+
       const out = await invoke<{ section: string; content: string }>("ic_report_section", {
         input: {
           provider,
           section,
           url: mode === "url" ? url.trim() : null,
           seed_text: mode === "text" ? text.trim() : null,
+          pdf_base64: pdfB64,
           hints: hints[section] || null,
           prior_sections: prior,
         },
@@ -780,7 +824,9 @@ function IcReport({
         (sec) => !!sections[sec]
       );
     }
-    return mode === "url" ? url.trim().length > 0 : text.trim().length > 0;
+    if (mode === "url") return url.trim().length > 0;
+    if (mode === "text") return text.trim().length > 0;
+    return pdfFile !== null;
   };
 
   const handleCopyCompile = () => {
@@ -818,6 +864,8 @@ function IcReport({
         setUrl={setUrl}
         text={text}
         setText={setText}
+        pdfFile={pdfFile}
+        setPdfFile={setPdfFile}
       />
 
       <div className="kn-stepper">
@@ -915,7 +963,7 @@ function ProviderPicker({
         value={provider}
         onChange={(e) => setProvider(e.target.value as Provider)}
       >
-        {(["anthropic", "openai", "local"] as Provider[]).map((p) => {
+        {(["anthropic", "openai", "gemini", "local"] as Provider[]).map((p) => {
           const ok = configuredProviders.includes(p);
           return (
             <option key={p} value={p} disabled={!ok}>
@@ -929,6 +977,8 @@ function ProviderPicker({
   );
 }
 
+export type SourceMode = "url" | "text" | "pdf";
+
 function SourceInput({
   mode,
   setMode,
@@ -936,13 +986,17 @@ function SourceInput({
   setUrl,
   text,
   setText,
+  pdfFile,
+  setPdfFile,
 }: {
-  mode: "url" | "text";
-  setMode: (m: "url" | "text") => void;
+  mode: SourceMode;
+  setMode: (m: SourceMode) => void;
   url: string;
   setUrl: (v: string) => void;
   text: string;
   setText: (v: string) => void;
+  pdfFile: File | null;
+  setPdfFile: (f: File | null) => void;
 }) {
   return (
     <div className="kn-source">
@@ -959,9 +1013,15 @@ function SourceInput({
         >
           From pasted text
         </button>
+        <button
+          className={`kn-tab ${mode === "pdf" ? "kn-tab--active" : ""}`}
+          onClick={() => setMode("pdf")}
+        >
+          From PDF
+        </button>
       </div>
 
-      {mode === "url" ? (
+      {mode === "url" && (
         <input
           type="url"
           className="kn-input"
@@ -971,7 +1031,34 @@ function SourceInput({
           autoComplete="off"
           spellCheck={false}
         />
-      ) : (
+      )}
+      {mode === "pdf" && (
+        <div className="kn-pdf-picker">
+          <label className="kn-pdf-picker-label">
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+              style={{ display: "none" }}
+            />
+            <span className="kn-btn kn-btn--ghost">
+              {pdfFile ? "Choose another PDF" : "Choose PDF file…"}
+            </span>
+          </label>
+          {pdfFile && (
+            <span className="kn-pdf-filename">
+              {pdfFile.name} · {Math.round(pdfFile.size / 1024)} KB
+            </span>
+          )}
+          {!pdfFile && (
+            <span className="kn-pdf-hint">
+              Pitch deck, white paper, founder one-pager. Text-based PDFs only —
+              scanned / image-only PDFs need OCR (not supported yet).
+            </span>
+          )}
+        </div>
+      )}
+      {mode === "text" && (
         <textarea
           className="kn-input kn-input--textarea"
           value={text}
