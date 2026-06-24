@@ -69,7 +69,9 @@ type View =
   | "template-editor"
   | "templates"
   | "report";
-type Provider = "anthropic" | "openai" | "gemini" | "local";
+// "vhs" = VHS-hosted (W4): the desktop relays the built prompt through the
+// VHS server proxy using a device bearer token; no user API key needed.
+type Provider = "anthropic" | "openai" | "gemini" | "local" | "vhs";
 
 type TestState =
   | { kind: "idle" }
@@ -82,9 +84,14 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   openai: "OpenAI",
   gemini: "Gemini",
   local: "Local (Ollama)",
+  vhs: "VHS-hosted",
 };
 
-const PROVIDER_HINTS: Record<Exclude<Provider, "local">, string> = {
+// Providers that take a bring-your-own API key (matches the Rust
+// SUPPORTED_PROVIDERS). "local" and "vhs" are configured differently.
+type ByoProvider = "anthropic" | "openai" | "gemini";
+
+const PROVIDER_HINTS: Record<ByoProvider, string> = {
   anthropic: "sk-ant-...",
   openai: "sk-...",
   gemini: "AIza...",
@@ -182,12 +189,28 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+// W4: turn the hosted /generate quota tail into a short toast line.
+type HostedQuota = { used: number; limit: number; overage: boolean };
+function formatQuota(q: HostedQuota): string {
+  if (q.overage) {
+    return `VHS-hosted · ${q.used}/${q.limit} used · overage billed $2 this report`;
+  }
+  if (q.limit > 0) {
+    return `VHS-hosted · ${q.used}/${q.limit} reports used this month`;
+  }
+  return "VHS-hosted report generated";
+}
+
 // ─── App shell ────────────────────────────────────────────────────────
 
 function App() {
   const [view, setView] = useState<View>("home");
   const [toast, setToast] = useState<string | null>(null);
   const [configuredProviders, setConfiguredProviders] = useState<Provider[]>([]);
+  // W4: VHS-hosted link state, tracked separately from configuredProviders
+  // (which comes from list_configured_providers — only BYO key providers).
+  // When linked, "vhs" is merged into the available providers below.
+  const [vhsLinked, setVhsLinked] = useState(false);
 
   // P1: saved reports + templates lifted to the App root so the persistent
   // sidebar reflects them everywhere, mirroring the existing refreshProviders
@@ -213,6 +236,14 @@ function App() {
     } catch (e) {
       console.error("list_configured_providers failed", e);
       setConfiguredProviders([]);
+    }
+    // VHS link state is a separate Keychain entry — refresh it alongside.
+    try {
+      const status = await invoke<string>("vhs_hosted_status");
+      setVhsLinked(status === "linked");
+    } catch (e) {
+      console.error("vhs_hosted_status failed", e);
+      setVhsLinked(false);
     }
   }, []);
 
@@ -276,13 +307,21 @@ function App() {
     setView("templates");
   }, []);
 
-  const hasAnyKey = configuredProviders.length > 0;
+  // The full set of providers a flow can run with: BYO keys + Local (from the
+  // Keychain scan) plus VHS-hosted when the device is linked. This is what the
+  // flows and ProviderPicker receive so "vhs" shows up as selectable.
+  const availableProviders = useMemo<Provider[]>(
+    () => (vhsLinked ? [...configuredProviders, "vhs"] : configuredProviders),
+    [configuredProviders, vhsLinked],
+  );
+
+  const hasAnyKey = availableProviders.length > 0;
   const headerSubtitle = useMemo(() => {
-    const n = configuredProviders.length;
+    const n = availableProviders.length;
     if (n === 0) return null;
-    if (n === 1) return `${PROVIDER_LABELS[configuredProviders[0]]} connected`;
+    if (n === 1) return `${PROVIDER_LABELS[availableProviders[0]]} connected`;
     return `${n} providers connected`;
-  }, [configuredProviders]);
+  }, [availableProviders]);
 
   // Which primary-nav entry the sidebar should highlight for the current view.
   const activeNav: SidebarNav | null =
@@ -346,6 +385,7 @@ function App() {
             <Settings
               onBack={goHome}
               configuredProviders={configuredProviders}
+              vhsLinked={vhsLinked}
               refresh={refreshProviders}
               showToast={showToast}
               onOpenTemplateEditor={() => setView("template-editor")}
@@ -354,14 +394,14 @@ function App() {
           {view === "quickmemo" && (
             <QuickMemo
               onBack={goHome}
-              configuredProviders={configuredProviders}
+              configuredProviders={availableProviders}
               showToast={showToast}
             />
           )}
           {view === "icreport" && (
             <IcReport
               onBack={goHome}
-              configuredProviders={configuredProviders}
+              configuredProviders={availableProviders}
               showToast={showToast}
             />
           )}
@@ -478,12 +518,14 @@ function Home({
 function Settings({
   onBack,
   configuredProviders,
+  vhsLinked,
   refresh,
   showToast,
   onOpenTemplateEditor,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
+  vhsLinked: boolean;
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
   onOpenTemplateEditor: () => void;
@@ -499,7 +541,8 @@ function Settings({
         <h3 className="kn-section-title">LLM Connection</h3>
         <p className="kn-section-body">
           Pick how KN33C4P talks to a model. Costs metered to your account or
-          machine. All three are live except VHS-hosted billing.
+          machine. Bring your own key, run a local model, or link your VHS
+          account to use the bundled hosted model.
         </p>
 
         <ByoKeyOption
@@ -514,7 +557,7 @@ function Settings({
           showToast={showToast}
         />
 
-        <VhsHostedOption showToast={showToast} />
+        <VhsHostedOption linked={vhsLinked} refresh={refresh} showToast={showToast} />
       </section>
 
       <section className="kn-section">
@@ -564,7 +607,7 @@ function ByoKeyOption({
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
-  const [provider, setProvider] = useState<Exclude<Provider, "local">>("anthropic");
+  const [provider, setProvider] = useState<ByoProvider>("anthropic");
   const [draft, setDraft] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
@@ -634,7 +677,7 @@ function ByoKeyOption({
               className="kn-input kn-input--select"
               value={provider}
               onChange={(e) => {
-                setProvider(e.target.value as Exclude<Provider, "local">);
+                setProvider(e.target.value as ByoProvider);
                 setTest({ kind: "idle" });
               }}
             >
@@ -842,26 +885,172 @@ function LocalModelOption({
   );
 }
 
-// ─── VHS-hosted option (C — server-side not deployed) ─────────────────
+// ─── VHS-hosted option (C — W4 device bind + hosted proxy) ────────────
+//
+// OAuth device-code flow. "Connect" → backend requests a code + opens the
+// browser → we show the 6-char user code + poll until the server approves
+// (after the user logs in to VHS and the subscription gate passes) → token is
+// stored in the Keychain and "vhs" becomes a selectable provider everywhere.
 
-function VhsHostedOption({ showToast }: { showToast: (m: string) => void }) {
-  return (
-    <div
-      className="kn-option kn-option--disabled kn-option--locked"
-      onClick={() =>
-        showToast("VHS-hosted billing endpoint ships in W2.5 — use A or B for now")
+type BindStart = {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  client_secret: string;
+  poll_interval_seconds: number;
+  expires_in_seconds: number;
+};
+
+type BindPhase =
+  | { kind: "idle" }
+  | { kind: "starting" }
+  | { kind: "waiting"; start: BindStart }
+  | { kind: "error"; message: string };
+
+function VhsHostedOption({
+  linked,
+  refresh,
+  showToast,
+}: {
+  linked: boolean;
+  refresh: () => Promise<void>;
+  showToast: (m: string) => void;
+}) {
+  const [phase, setPhase] = useState<BindPhase>({ kind: "idle" });
+
+  // Poll loop: while waiting, hit vhs_poll_device on the server's cadence
+  // until approved / denied / expired. Cleaned up on unmount or phase change.
+  useEffect(() => {
+    if (phase.kind !== "waiting") return;
+    let cancelled = false;
+    const { device_code, client_secret, poll_interval_seconds, expires_in_seconds } =
+      phase.start;
+    const deadline = Date.now() + expires_in_seconds * 1000;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (Date.now() > deadline) {
+        setPhase({ kind: "error", message: "Code expired — start the connect again" });
+        return;
       }
-      role="button"
-      aria-disabled="true"
-    >
+      try {
+        const status = await invoke<string>("vhs_poll_device", {
+          deviceCode: device_code,
+          clientSecret: client_secret,
+        });
+        if (cancelled) return;
+        if (status.startsWith("approved")) {
+          const who = status.slice("approved:".length);
+          setPhase({ kind: "idle" });
+          await refresh();
+          showToast(`VHS-hosted linked${who ? ` · ${who}` : ""}`);
+          return;
+        }
+        // "pending" → schedule the next poll.
+        timer = window.setTimeout(tick, poll_interval_seconds * 1000);
+      } catch (e) {
+        if (cancelled) return;
+        setPhase({ kind: "error", message: String(e) });
+      }
+    };
+
+    let timer = window.setTimeout(tick, poll_interval_seconds * 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [phase, refresh, showToast]);
+
+  const handleConnect = async () => {
+    setPhase({ kind: "starting" });
+    try {
+      const start = await invoke<BindStart>("vhs_request_device_code");
+      setPhase({ kind: "waiting", start });
+    } catch (e) {
+      setPhase({ kind: "error", message: String(e) });
+    }
+  };
+
+  const handleUnlink = async () => {
+    try {
+      await invoke("vhs_unlink");
+      await refresh();
+      setPhase({ kind: "idle" });
+      showToast("VHS-hosted unlinked");
+    } catch (e) {
+      showToast(`Unlink failed: ${String(e)}`);
+    }
+  };
+
+  return (
+    <div className="kn-option">
       <div className="kn-option-title">
         <span className="kn-tag">C</span> VHS-hosted
-        <span className="kn-pill">Billing endpoint W2.5</span>
+        {linked ? (
+          <span className="kn-pill kn-pill--ok">Linked</span>
+        ) : (
+          <span className="kn-pill">No API key needed</span>
+        )}
       </div>
       <div className="kn-option-body">
-        $2 per finished IC report. Stripe metered billing on your VHS account.
-        Server-side metered billing not deployed yet — pick A or B for now.
+        Link your VHS account and KN33C4P uses the bundled hosted model — no
+        API key on this Mac. Your $42/mo subscription includes 20 reports; extra
+        reports bill $2 each via Stripe metered billing.
       </div>
+
+      {linked ? (
+        <div className="kn-key-list">
+          <div className="kn-key-row">
+            <span className="kn-key-name">{PROVIDER_LABELS.vhs}</span>
+            <span className="kn-key-status kn-key-status--on">linked</span>
+            <button className="kn-link-btn" onClick={handleUnlink}>
+              Unlink
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="kn-form">
+          {phase.kind === "waiting" ? (
+            <>
+              <div className="kn-form-feedback">
+                1. A browser window opened to{" "}
+                <a href={phase.start.verification_url} target="_blank" rel="noreferrer">
+                  {phase.start.verification_url}
+                </a>
+                . Sign in to VHS if asked.
+                <br />
+                2. Enter this code in the browser:
+              </div>
+              <div className="kn-device-code">{phase.start.user_code}</div>
+              <div className="kn-form-feedback kn-form-feedback--muted">
+                Waiting for you to approve in the browser…
+              </div>
+              <div className="kn-form-actions">
+                <button className="kn-btn" onClick={() => setPhase({ kind: "idle" })}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="kn-form-actions">
+                <button
+                  className="kn-btn kn-btn--primary"
+                  onClick={handleConnect}
+                  disabled={phase.kind === "starting"}
+                >
+                  {phase.kind === "starting" ? "Starting…" : "Connect to VHS"}
+                </button>
+              </div>
+              {phase.kind === "error" && (
+                <div className="kn-form-feedback kn-form-feedback--err">
+                  ✗ {phase.message}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -910,19 +1099,33 @@ function QuickMemo({
         pdfB64 = await fileToBase64(pdfFile);
       }
       const override = getCustomPrompt(template, "memo");
-      const out = await invoke<{ memo: string; source_excerpt: string }>("quick_memo", {
-        input: {
-          provider,
-          url: mode === "url" ? url.trim() : null,
-          seed_text: mode === "text" ? text.trim() : null,
-          pdf_base64: pdfB64,
-          note: note.trim() || null,
-          template,
-          prompt_override: override || null,
-        },
-      });
-      setMemo(out.memo);
-      setExcerpt(out.source_excerpt);
+      const memoInput = {
+        provider,
+        url: mode === "url" ? url.trim() : null,
+        seed_text: mode === "text" ? text.trim() : null,
+        pdf_base64: pdfB64,
+        note: note.trim() || null,
+        template,
+        prompt_override: override || null,
+      };
+      // W4: route to the hosted proxy when provider is VHS-hosted, otherwise
+      // the BYO/local path. Both build the same prompt server/desktop-side.
+      if (provider === "vhs") {
+        const out = await invoke<{
+          memo: string;
+          source_excerpt: string;
+          quota: { used: number; limit: number; overage: boolean };
+        }>("vhs_hosted_memo", { input: memoInput });
+        setMemo(out.memo);
+        setExcerpt(out.source_excerpt);
+        showToast(formatQuota(out.quota));
+      } else {
+        const out = await invoke<{ memo: string; source_excerpt: string }>("quick_memo", {
+          input: memoInput,
+        });
+        setMemo(out.memo);
+        setExcerpt(out.source_excerpt);
+      }
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -1093,21 +1296,37 @@ function IcReport({
       }
 
       const override = getCustomPrompt(template, section);
-      const out = await invoke<{ section: string; content: string }>("ic_report_section", {
-        input: {
-          provider,
-          section,
-          url: mode === "url" ? url.trim() : null,
-          seed_text: mode === "text" ? text.trim() : null,
-          pdf_base64: pdfB64,
-          hints: hints[section] || null,
-          prior_sections: prior,
-          template,
-          stage: stage || null,
-          prompt_override: override || null,
-        },
-      });
-      setSections((cur) => ({ ...cur, [section]: out.content }));
+      const icInput = {
+        provider,
+        section,
+        url: mode === "url" ? url.trim() : null,
+        seed_text: mode === "text" ? text.trim() : null,
+        pdf_base64: pdfB64,
+        hints: hints[section] || null,
+        prior_sections: prior,
+        template,
+        stage: stage || null,
+        prompt_override: override || null,
+      };
+      // W4: hosted vs BYO/local routing — both build the identical section prompt.
+      let content: string;
+      if (provider === "vhs") {
+        const out = await invoke<{
+          section: string;
+          content: string;
+          quota: { used: number; limit: number; overage: boolean };
+        }>("vhs_hosted_ic_section", { input: icInput });
+        content = out.content;
+        // Only surface the quota toast on the compile pass so a 5-section run
+        // doesn't fire 5 toasts (each section counts server-side regardless).
+        if (section === "compile") showToast(formatQuota(out.quota));
+      } else {
+        const out = await invoke<{ section: string; content: string }>("ic_report_section", {
+          input: icInput,
+        });
+        content = out.content;
+      }
+      setSections((cur) => ({ ...cur, [section]: content }));
       const idx = activeSections.indexOf(section);
       if (idx >= 0 && idx < activeSections.length - 1) {
         setActiveSection(activeSections[idx + 1]);
@@ -1316,12 +1535,14 @@ function ProviderPicker({
         value={provider}
         onChange={(e) => setProvider(e.target.value as Provider)}
       >
-        {(["anthropic", "openai", "gemini", "local"] as Provider[]).map((p) => {
+        {(["anthropic", "openai", "gemini", "local", "vhs"] as Provider[]).map((p) => {
           const ok = configuredProviders.includes(p);
+          // "vhs" reads "not linked" instead of "not configured" when absent.
+          const offLabel = p === "vhs" ? " (not linked)" : " (not configured)";
           return (
             <option key={p} value={p} disabled={!ok}>
               {PROVIDER_LABELS[p]}
-              {ok ? "" : " (not configured)"}
+              {ok ? "" : offLabel}
             </option>
           );
         })}

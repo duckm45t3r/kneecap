@@ -758,6 +758,37 @@ a:hover {
   border: 1px solid rgba(192, 80, 70, 0.3);
 }
 
+.kn-form-feedback--muted {
+  color: var(--vhs-paper-dim);
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+}
+
+/* ── VHS-hosted device-code bind (W4) ──────────────────────────────── */
+
+.kn-pill--ok {
+  color: var(--vhs-teal);
+  background: rgba(61, 191, 174, 0.1);
+  border-color: rgba(61, 191, 174, 0.4);
+}
+
+.kn-device-code {
+  margin: 10px 0;
+  padding: 12px 16px;
+  text-align: center;
+  font-family: var(--vhs-mono, monospace);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  color: var(--vhs-paper);
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  /* Pad the left so the wide letter-spacing stays visually centred. */
+  text-indent: 0.32em;
+  user-select: all;
+}
+
 /* ── Connected provider list ───────────────────────────────────────── */
 
 .kn-key-list {
