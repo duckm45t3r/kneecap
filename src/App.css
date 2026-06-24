@@ -89,14 +89,259 @@ a:hover {
   background: var(--vhs-ink-3);
 }
 
+/* ── Body (sidebar + main) ───────────────────────────────────────── */
+
+.kn-body {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 
 .kn-main {
   flex: 1;
-  padding: 56px 64px;
-  max-width: 920px;
+  padding: 48px 56px;
   width: 100%;
-  margin: 0 auto;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* Inner content stays in a readable column even with the sidebar present.
+   The template designer (.kn-ed) opts out — its 3-column grid needs the
+   full width. */
+.kn-main > *:not(.kn-ed) {
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ── Persistent sidebar (P1) ─────────────────────────────────────── */
+
+.kn-sidebar {
+  width: 256px;
+  flex-shrink: 0;
+  background: var(--vhs-ink-2);
+  border-right: 1px solid var(--vhs-hairline);
+  padding: 18px 14px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.kn-sidebar-logo {
+  background: none;
+  border: 0;
+  color: var(--vhs-paper);
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 18px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-sidebar-logo:hover {
+  color: var(--vhs-gold);
+}
+
+.kn-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kn-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--vhs-paper-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kn-sidebar-link:hover {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+}
+
+.kn-sidebar-link--active {
+  background: rgba(212, 183, 106, 0.1);
+  color: var(--vhs-gold);
+}
+
+.kn-sidebar-link-emoji {
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.kn-sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-sidebar-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+  padding: 0 10px;
+  margin-bottom: 2px;
+}
+
+.kn-sidebar-count {
+  font-size: 9.5px;
+  color: var(--vhs-paper-faint);
+  background: var(--vhs-ink-3);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.kn-sidebar-empty {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vhs-paper-faint);
+  padding: 2px 10px 4px;
+  margin: 0;
+}
+
+.kn-sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.kn-sidebar-report,
+.kn-sidebar-tpl {
+  display: flex;
+  align-items: stretch;
+  border-radius: 6px;
+}
+
+.kn-sidebar-report--active {
+  background: rgba(212, 183, 106, 0.1);
+}
+
+.kn-sidebar-report-main,
+.kn-sidebar-tpl-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: none;
+  border: 0;
+  text-align: left;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--vhs-paper-dim);
+  font: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kn-sidebar-report-main:hover,
+.kn-sidebar-tpl-main:hover {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+}
+
+.kn-sidebar-report--active .kn-sidebar-report-main {
+  color: var(--vhs-paper);
+}
+
+.kn-sidebar-report-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-sidebar-report-meta {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-sidebar-report-del {
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 9px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.kn-sidebar-report-del:hover {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.1);
+}
+
+.kn-sidebar-tpl-main {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kn-sidebar-tpl-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-sidebar-tpl-badge {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.kn-sidebar-tpl-badge--starter {
+  color: var(--vhs-paper-faint);
+  border: 1px solid var(--vhs-hairline);
+}
+
+.kn-sidebar-tpl-badge--custom {
+  color: var(--vhs-gold);
+  border: 1px solid var(--vhs-gold-dim);
 }
 
 /* ── Home view ───────────────────────────────────────────────────── */

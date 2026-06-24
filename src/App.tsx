@@ -14,6 +14,15 @@ import {
   getFirmLogo,
 } from "./templates/templateStore";
 import type { Template } from "./templates/types";
+import { Sidebar, type SidebarNav } from "./Sidebar";
+import {
+  listReports,
+  getReport,
+  saveReport,
+  deleteReport,
+  newReportId,
+  type SavedReport,
+} from "./reports/reportStore";
 import "./App.css";
 
 /**
@@ -52,7 +61,14 @@ function MarkdownView({ source }: { source: string }) {
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-type View = "home" | "settings" | "quickmemo" | "icreport" | "template-editor" | "templates";
+type View =
+  | "home"
+  | "settings"
+  | "quickmemo"
+  | "icreport"
+  | "template-editor"
+  | "templates"
+  | "report";
 type Provider = "anthropic" | "openai" | "gemini" | "local";
 
 type TestState =
@@ -173,6 +189,18 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [configuredProviders, setConfiguredProviders] = useState<Provider[]>([]);
 
+  // P1: saved reports + templates lifted to the App root so the persistent
+  // sidebar reflects them everywhere, mirroring the existing refreshProviders
+  // pattern. Reports live on the Tauri fs; templates still come from
+  // templateStore (localStorage — Phase D migration deferred).
+  const [reports, setReports] = useState<SavedReport[]>([]);
+  const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
+  // The saved report currently open in the read-only viewer.
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  // Template the gallery should jump straight to "generate" on (set when the
+  // sidebar Templates list is clicked). null = land on browse.
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
@@ -188,9 +216,65 @@ function App() {
     }
   }, []);
 
+  const refreshReports = useCallback(async () => {
+    try {
+      setReports(await listReports());
+    } catch (e) {
+      console.error("list_reports failed", e);
+      setReports([]);
+    }
+  }, []);
+
+  const refreshTemplates = useCallback(() => {
+    setTemplates(getAllTemplates());
+  }, []);
+
   useEffect(() => {
     refreshProviders();
-  }, [refreshProviders]);
+    refreshReports();
+  }, [refreshProviders, refreshReports]);
+
+  const goHome = useCallback(() => {
+    setSelectedReportId(null);
+    setView("home");
+  }, []);
+
+  const handleNavigate = useCallback(
+    (nav: SidebarNav) => {
+      setSelectedReportId(null);
+      setPendingTemplateId(null);
+      setView(nav);
+    },
+    [],
+  );
+
+  const handleOpenReport = useCallback((id: string) => {
+    setSelectedReportId(id);
+    setView("report");
+  }, []);
+
+  const handleDeleteReport = useCallback(
+    async (id: string) => {
+      try {
+        await deleteReport(id);
+        await refreshReports();
+        if (selectedReportId === id) {
+          setSelectedReportId(null);
+          setView("home");
+        }
+        showToast("Report deleted");
+      } catch (e) {
+        showToast(`Delete failed: ${String(e)}`);
+      }
+    },
+    [refreshReports, selectedReportId, showToast],
+  );
+
+  const handleGenerateTemplate = useCallback((id: string) => {
+    setSelectedReportId(null);
+    setPendingTemplateId(id);
+    setView("templates");
+  }, []);
 
   const hasAnyKey = configuredProviders.length > 0;
   const headerSubtitle = useMemo(() => {
@@ -200,16 +284,30 @@ function App() {
     return `${n} providers connected`;
   }, [configuredProviders]);
 
+  // Which primary-nav entry the sidebar should highlight for the current view.
+  const activeNav: SidebarNav | null =
+    view === "home"
+      ? "home"
+      : view === "settings"
+        ? "settings"
+        : view === "quickmemo"
+          ? "quickmemo"
+          : view === "icreport"
+            ? "icreport"
+            : view === "templates" || view === "template-editor"
+              ? "templates"
+              : null;
+
   return (
     <div className="kn-app">
       <header className="kn-header">
-        <button className="kn-logo" onClick={() => setView("home")} title="Home">
+        <button className="kn-logo" onClick={goHome} title="Home">
           KN33C4P
         </button>
         <div className="kn-header-spacer" />
         <button
           className="kn-icon-btn"
-          onClick={() => setView("settings")}
+          onClick={() => handleNavigate("settings")}
           title="Settings"
           aria-label="Settings"
         >
@@ -217,58 +315,81 @@ function App() {
         </button>
       </header>
 
-      <main className="kn-main">
-        {view === "home" && (
-          <Home
-            hasAnyKey={hasAnyKey}
-            onOpenSettings={() => setView("settings")}
-            onOpenTemplates={() => setView("templates")}
-            onPick={(target) => {
-              if (!hasAnyKey) {
-                showToast("Connect an LLM in Settings first");
-                return;
-              }
-              setView(target);
-            }}
-          />
-        )}
-        {view === "settings" && (
-          <Settings
-            onBack={() => setView("home")}
-            configuredProviders={configuredProviders}
-            refresh={refreshProviders}
-            showToast={showToast}
-            onOpenTemplateEditor={() => setView("template-editor")}
-          />
-        )}
-        {view === "quickmemo" && (
-          <QuickMemo
-            onBack={() => setView("home")}
-            configuredProviders={configuredProviders}
-            showToast={showToast}
-          />
-        )}
-        {view === "icreport" && (
-          <IcReport
-            onBack={() => setView("home")}
-            configuredProviders={configuredProviders}
-            showToast={showToast}
-          />
-        )}
-        {view === "template-editor" && (
-          <TemplateEditor
-            onBack={() => setView("settings")}
-            showToast={showToast}
-          />
-        )}
-        {view === "templates" && (
-          <TemplateGallery
-            onBack={() => setView("home")}
-            configuredProviders={configuredProviders}
-            showToast={showToast}
-          />
-        )}
-      </main>
+      <div className="kn-body">
+        <Sidebar
+          activeNav={activeNav}
+          selectedReportId={selectedReportId}
+          reports={reports}
+          templates={templates}
+          onNavigate={handleNavigate}
+          onOpenReport={handleOpenReport}
+          onDeleteReport={handleDeleteReport}
+          onGenerateTemplate={handleGenerateTemplate}
+        />
+
+        <main className="kn-main">
+          {view === "home" && (
+            <Home
+              hasAnyKey={hasAnyKey}
+              onOpenSettings={() => handleNavigate("settings")}
+              onOpenTemplates={() => handleNavigate("templates")}
+              onPick={(target) => {
+                if (!hasAnyKey) {
+                  showToast("Connect an LLM in Settings first");
+                  return;
+                }
+                setView(target);
+              }}
+            />
+          )}
+          {view === "settings" && (
+            <Settings
+              onBack={goHome}
+              configuredProviders={configuredProviders}
+              refresh={refreshProviders}
+              showToast={showToast}
+              onOpenTemplateEditor={() => setView("template-editor")}
+            />
+          )}
+          {view === "quickmemo" && (
+            <QuickMemo
+              onBack={goHome}
+              configuredProviders={configuredProviders}
+              showToast={showToast}
+            />
+          )}
+          {view === "icreport" && (
+            <IcReport
+              onBack={goHome}
+              configuredProviders={configuredProviders}
+              showToast={showToast}
+            />
+          )}
+          {view === "template-editor" && (
+            <TemplateEditor onBack={() => setView("settings")} showToast={showToast} />
+          )}
+          {view === "templates" && (
+            <TemplateGallery
+              onBack={goHome}
+              configuredProviders={configuredProviders}
+              showToast={showToast}
+              initialTemplateId={pendingTemplateId}
+              clearInitialTemplate={() => setPendingTemplateId(null)}
+              refreshTemplates={refreshTemplates}
+              refreshReports={refreshReports}
+              onSavedReport={handleOpenReport}
+            />
+          )}
+          {view === "report" && (
+            <ReportViewer
+              reportId={selectedReportId}
+              onBack={goHome}
+              onDelete={handleDeleteReport}
+              showToast={showToast}
+            />
+          )}
+        </main>
+      </div>
 
       <footer className="kn-footer">
         <span className="kn-footer-text">
@@ -1447,19 +1568,47 @@ function TemplateGallery({
   onBack,
   configuredProviders,
   showToast,
+  initialTemplateId,
+  clearInitialTemplate,
+  refreshTemplates,
+  refreshReports,
+  onSavedReport,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
   showToast: (m: string) => void;
+  // When the sidebar Templates list is clicked, the gallery jumps straight to
+  // the generate flow for that template id. Cleared once consumed.
+  initialTemplateId?: string | null;
+  clearInitialTemplate?: () => void;
+  // Keep the App-root template + report lists (and the sidebar) in sync.
+  refreshTemplates?: () => void;
+  refreshReports?: () => Promise<void>;
+  onSavedReport?: (id: string) => void;
 }) {
   const [mode, setMode] = useState<"browse" | "edit" | "generate">("browse");
   const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
-  const [selectedId, setSelectedId] = useState<string>(templates[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState<string>(
+    initialTemplateId ?? templates[0]?.id ?? "",
+  );
   const [editDraft, setEditDraft] = useState<Template | null>(null);
 
-  const refresh = useCallback(() => setTemplates(getAllTemplates()), []);
+  const refresh = useCallback(() => {
+    setTemplates(getAllTemplates());
+    refreshTemplates?.();
+  }, [refreshTemplates]);
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
   const firmLogo = getFirmLogo();
+
+  // Sidebar deep-link: open straight into the generate flow for the requested
+  // template, then clear the pending id so a later browse doesn't re-trigger.
+  useEffect(() => {
+    if (initialTemplateId) {
+      setSelectedId(initialTemplateId);
+      setMode("generate");
+      clearInitialTemplate?.();
+    }
+  }, [initialTemplateId, clearInitialTemplate]);
 
   if (mode === "edit" && editDraft) {
     return (
@@ -1486,6 +1635,8 @@ function TemplateGallery({
         configuredProviders={configuredProviders}
         showToast={showToast}
         onClose={() => setMode("browse")}
+        refreshReports={refreshReports}
+        onSavedReport={onSavedReport}
       />
     );
   }
@@ -1502,6 +1653,7 @@ function TemplateGallery({
     const next = getAllTemplates();
     setTemplates(next);
     setSelectedId(next[0]?.id ?? "");
+    refreshTemplates?.();
     showToast("Template deleted");
   };
 
@@ -1569,11 +1721,17 @@ function GenerateFromTemplate({
   configuredProviders,
   showToast,
   onClose,
+  refreshReports,
+  onSavedReport,
 }: {
   template: Template;
   configuredProviders: Provider[];
   showToast: (m: string) => void;
   onClose: () => void;
+  // P1: after a save, refresh the App-root report list (sidebar) and
+  // optionally open the freshly-saved report in the read-only viewer.
+  refreshReports?: () => Promise<void>;
+  onSavedReport?: (id: string) => void;
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
@@ -1587,6 +1745,9 @@ function GenerateFromTemplate({
   const [results, setResults] = useState<Record<string, string>>({});
   const [compiled, setCompiled] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // P1 save state: idle → saving → saved. Resets to idle on every fresh run
+  // so a re-generate offers a fresh save.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   const genBlocks = template.blocks.filter((b) => b.content.mode === "generated");
   const firmLogo = getFirmLogo();
@@ -1622,6 +1783,7 @@ function GenerateFromTemplate({
     setErr(null);
     setResults({});
     setCompiled(null);
+    setSaveState("idle");
     try {
       let pdfB64: string | null = null;
       if (mode === "pdf" && pdfFile) pdfB64 = await fileToBase64(pdfFile);
@@ -1663,6 +1825,42 @@ function GenerateFromTemplate({
     if (!compiled) return;
     navigator.clipboard.writeText(compiled);
     showToast("Report copied");
+  };
+
+  // Derive a human title from the first markdown heading, else the template
+  // name + date. Keeps the sidebar list scannable without asking the user.
+  const deriveTitle = (md: string): string => {
+    const heading = md
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => /^#{1,3}\s+\S/.test(l));
+    if (heading) return heading.replace(/^#{1,3}\s+/, "").slice(0, 80);
+    return `${template.name} · ${new Date().toLocaleDateString()}`;
+  };
+
+  const handleSave = async () => {
+    if (!compiled) return;
+    setSaveState("saving");
+    try {
+      const id = newReportId();
+      await saveReport({
+        id,
+        title: deriveTitle(compiled),
+        templateId: template.id,
+        templateName: template.name,
+        provider,
+        createdAt: Date.now(),
+        markdown: compiled,
+        blocks: results,
+      });
+      await refreshReports?.();
+      setSaveState("saved");
+      showToast("Report saved");
+      onSavedReport?.(id);
+    } catch (e) {
+      setSaveState("idle");
+      showToast(`Save failed: ${String(e)}`);
+    }
   };
 
   return (
@@ -1716,9 +1914,22 @@ function GenerateFromTemplate({
           {running ? "Generating…" : "Generate report"}
         </button>
         {compiled && (
-          <button className="kn-btn" onClick={handleCopy}>
-            Copy report
-          </button>
+          <>
+            <button
+              className="kn-btn"
+              onClick={handleSave}
+              disabled={saveState === "saving"}
+            >
+              {saveState === "saving"
+                ? "Saving…"
+                : saveState === "saved"
+                  ? "✓ Saved"
+                  : "Save report"}
+            </button>
+            <button className="kn-btn" onClick={handleCopy}>
+              Copy report
+            </button>
+          </>
         )}
       </div>
 
@@ -1759,6 +1970,113 @@ function GenerateFromTemplate({
             <MarkdownView source={compiled} />
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Read-only report viewer (P1 keystone) ────────────────────────────
+//
+// Loads a saved report from the Tauri fs by id and renders its compiled
+// markdown read-only, reusing MarkdownView + the firm-logo render path from
+// GenerateFromTemplate. This is what makes saved reports a durable workspace
+// artefact rather than transient component state.
+
+function ReportViewer({
+  reportId,
+  onBack,
+  onDelete,
+  showToast,
+}: {
+  reportId: string | null;
+  onBack: () => void;
+  onDelete: (id: string) => void;
+  showToast: (m: string) => void;
+}) {
+  const [report, setReport] = useState<SavedReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const firmLogo = getFirmLogo();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!reportId) {
+      setReport(null);
+      setLoading(false);
+      setNotFound(true);
+      return;
+    }
+    setLoading(true);
+    setNotFound(false);
+    getReport(reportId)
+      .then((r) => {
+        if (cancelled) return;
+        if (r) setReport(r);
+        else setNotFound(true);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNotFound(true);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reportId]);
+
+  const handleCopy = () => {
+    if (!report) return;
+    navigator.clipboard.writeText(report.markdown);
+    showToast("Report copied");
+  };
+
+  return (
+    <div className="kn-flow">
+      <button className="kn-back" onClick={onBack}>
+        ← Back
+      </button>
+
+      {loading && <p className="kn-flow-sub">Loading report…</p>}
+
+      {!loading && notFound && (
+        <div className="kn-form-feedback kn-form-feedback--err">
+          ✗ This report could not be found — it may have been deleted.
+        </div>
+      )}
+
+      {!loading && report && (
+        <>
+          <h2 className="kn-flow-title">{report.title}</h2>
+          <p className="kn-flow-sub">
+            {report.templateName || "report"}
+            {report.provider ? ` · ${PROVIDER_LABELS[report.provider as Provider] ?? report.provider}` : ""}
+            {report.createdAt ? ` · ${new Date(report.createdAt).toLocaleString()}` : ""}
+          </p>
+
+          <div className="kn-form-actions" style={{ marginBottom: 8 }}>
+            <button className="kn-btn" onClick={handleCopy}>
+              Copy report
+            </button>
+            <button className="kn-btn" onClick={() => onDelete(report.id)}>
+              Delete
+            </button>
+          </div>
+
+          <div className="kn-result" style={{ borderTop: "none", paddingTop: 0 }}>
+            <div className="kn-markdown">
+              {firmLogo && (
+                <img
+                  src={firmLogo.dataUrl}
+                  alt=""
+                  className="kn-tpl-logo-img"
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+              <MarkdownView source={report.markdown} />
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

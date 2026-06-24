@@ -9,6 +9,7 @@ use base64::Engine;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use tauri::Manager;
 use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "capital.vhs.kneecap";
@@ -1504,6 +1505,113 @@ async fn generate_block(input: GenerateBlockInput) -> Result<String, String> {
     }
 }
 
+// ─── Report persistence (P1 — Tauri filesystem) ──────────────────────
+//
+// Saved reports live as opaque JSON files under
+// `{app_data_dir}/reports/<id>.json`. The frontend owns the schema
+// (SavedReport in src/reports/reportStore.ts); the backend treats each file
+// as an opaque string so adding a field never touches Rust. We use
+// `app.path().app_data_dir()` + std::fs rather than tauri-plugin-fs — the
+// `core:path:default` permission is already granted and this keeps us off the
+// fs-plugin ACL entirely, matching the hand-rolled #[tauri::command] posture
+// of the rest of this file.
+
+/// Sanitise a caller-supplied report id before joining it onto a filesystem
+/// path. A crafted id like `../../foo` or `/etc/passwd` must NOT escape the
+/// reports dir, so we hard-restrict to `[A-Za-z0-9_-]` and reject anything
+/// empty or over-long. This is the single chokepoint every read / write /
+/// delete passes through — defence-in-depth against path traversal.
+fn sanitize_report_id(id: &str) -> Result<String, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("Empty report id".to_string());
+    }
+    if trimmed.len() > 128 {
+        return Err("Report id too long".to_string());
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "Invalid report id: {} (only A-Z a-z 0-9 _ - allowed)",
+            trimmed
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Resolve `{app_data_dir}/reports/`, creating it on first use. app_data_dir
+/// resolves to `data_dir/${bundle_identifier}` (capital.vhs.kneecap per
+/// tauri.conf.json), so reports stay scoped to this app.
+fn reports_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Cannot resolve app data dir: {}", e))?;
+    let dir = base.join("reports");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Cannot create reports dir: {}", e))?;
+    Ok(dir)
+}
+
+#[tauri::command]
+fn save_report(app: tauri::AppHandle, id: String, json: String) -> Result<(), String> {
+    let safe_id = sanitize_report_id(&id)?;
+    let dir = reports_dir(&app)?;
+    let path = dir.join(format!("{}.json", safe_id));
+    std::fs::write(&path, json.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn list_reports(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dir = reports_dir(&app)?;
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        // Dir vanished between create + read — treat as empty, not an error.
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("Cannot read reports dir: {}", e)),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        // Skip unreadable / partially-written files rather than failing the
+        // whole list — one corrupt file shouldn't blank the sidebar.
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            out.push(contents);
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn load_report(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let safe_id = sanitize_report_id(&id)?;
+    let dir = reports_dir(&app)?;
+    let path = dir.join(format!("{}.json", safe_id));
+    std::fs::read_to_string(&path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => "Report not found".to_string(),
+        _ => format!("Read failed: {}", e),
+    })
+}
+
+#[tauri::command]
+fn delete_report(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let safe_id = sanitize_report_id(&id)?;
+    let dir = reports_dir(&app)?;
+    let path = dir.join(format!("{}.json", safe_id));
+    // Mirror delete_api_key: a missing file is a no-op success, not an error.
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Delete failed: {}", e)),
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1519,7 +1627,11 @@ pub fn run() {
             test_local_connection,
             vhs_hosted_status,
             gather_source,
-            generate_block
+            generate_block,
+            save_report,
+            list_reports,
+            load_report,
+            delete_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
