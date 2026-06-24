@@ -12,6 +12,7 @@
     "core:menu:default",
     "core:tray:default",
     "core:path:default",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }

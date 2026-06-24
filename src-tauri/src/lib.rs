@@ -2112,6 +2112,18 @@ fn delete_report(app: tauri::AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // W5: GitHub Releases auto-update. Desktop-only (no mobile target).
+        // The plugin reads endpoints + pubkey from tauri.conf.json. The
+        // frontend can call check()/downloadAndInstall() via the JS plugin; we
+        // register the Rust side here so the command surface is available.
+        .setup(|app| {
+            // tauri::Manager (for app.handle()) is already in scope from the
+            // top-level `use tauri::Manager;`.
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             save_api_key,
             delete_api_key,

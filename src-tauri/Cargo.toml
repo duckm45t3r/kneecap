@@ -22,6 +22,12 @@ tauri-build = { version = "2", features = [] }
 # `cargo update` can't pull in a compromised or yanked patch silently.
 tauri = { version = "=2.11.2", features = [] }
 tauri-plugin-opener = "=2.5.4"
+# W5 distribution: GitHub Releases auto-update. Requires a minisign pubkey in
+# tauri.conf.json plugins.updater.pubkey — Wei generates the real keypair with
+# `tauri signer generate` (see BUILD.md). A clearly-marked PLACEHOLDER pubkey is
+# set in tauri.conf.json so the project compiles + cargo check passes; the
+# updater will reject real update manifests until the placeholder is replaced.
+tauri-plugin-updater = "=2.10.1"
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = "=1.0.140"
 keyring = { version = "=3.6.3", features = ["apple-native"] }
