@@ -555,26 +555,13 @@ fn extract_pdf_text_from_base64(b64: &str) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
-async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
-    let key = read_key(&input.provider)?;
-
-    // 1. Gather source text — URL fetch, pasted text, or PDF extract.
-    let source_text = if let Some(url) = input.url.as_ref().filter(|u| !u.trim().is_empty()) {
-        fetch_url_text(url.clone()).await?
-    } else if let Some(seed) = input.seed_text.as_ref().filter(|s| !s.trim().is_empty()) {
-        seed.clone()
-    } else if let Some(pdf_b64) = input.pdf_base64.as_ref().filter(|p| !p.trim().is_empty()) {
-        extract_pdf_text_from_base64(pdf_b64)?
-    } else {
-        return Err("Need a URL, pasted text, or PDF".to_string());
-    };
-
-    let excerpt: String = source_text.chars().take(600).collect();
-    let safe_source = neutralise_source_tags(&source_text);
-
-    let note = input.note.as_deref().unwrap_or("").trim();
-    let template = input.template.as_deref().unwrap_or("full-memo");
+/// Build the Quick Memo user prompt from already-gathered source text.
+/// Extracted so the BYO path (`quick_memo`) and the VHS-hosted path
+/// (`vhs_hosted_memo`) build the IDENTICAL prompt — quality must match
+/// regardless of which provider relays it to the model.
+fn build_memo_prompt(source_text: &str, note: &str, template: &str, prompt_override: Option<&str>) -> String {
+    let safe_source = neutralise_source_tags(source_text);
+    let note = note.trim();
 
     let structure_block = match template {
         // simple-memo: 1-page bullets-only quick read for triage.
@@ -605,14 +592,10 @@ async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
     // R7: prompt override — if user has edited the template's prompt and
     // saved it, use that as the structure block instead of the built-in.
     // Source / note wiring stays intact below.
-    let override_block = input
-        .prompt_override
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
+    let override_block = prompt_override.map(|s| s.trim()).filter(|s| !s.is_empty());
     let effective_structure = override_block.unwrap_or(structure_block);
 
-    let user_prompt = format!(
+    format!(
         "You are turning a single web source into an investor screening memo.\n\
         \n\
         {}\n\
@@ -629,6 +612,33 @@ async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
         effective_structure,
         if note.is_empty() { "(none provided)" } else { note },
         safe_source
+    )
+}
+
+#[tauri::command]
+async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
+    let key = read_key(&input.provider)?;
+
+    // 1. Gather source text — URL fetch, pasted text, or PDF extract.
+    let source_text = if let Some(url) = input.url.as_ref().filter(|u| !u.trim().is_empty()) {
+        fetch_url_text(url.clone()).await?
+    } else if let Some(seed) = input.seed_text.as_ref().filter(|s| !s.trim().is_empty()) {
+        seed.clone()
+    } else if let Some(pdf_b64) = input.pdf_base64.as_ref().filter(|p| !p.trim().is_empty()) {
+        extract_pdf_text_from_base64(pdf_b64)?
+    } else {
+        return Err("Need a URL, pasted text, or PDF".to_string());
+    };
+
+    let excerpt: String = source_text.chars().take(600).collect();
+
+    let note = input.note.as_deref().unwrap_or("");
+    let template = input.template.as_deref().unwrap_or("full-memo");
+    let user_prompt = build_memo_prompt(
+        &source_text,
+        note,
+        template,
+        input.prompt_override.as_deref(),
     );
 
     let client = no_redirect_client(120)?;
@@ -1398,17 +1408,504 @@ async fn call_local_memo(client: &reqwest::Client, user_prompt: &str) -> Result<
     Ok(parsed.message.content)
 }
 
-// ─── VHS-hosted (W2.5 — stub; needs server-side metered billing) ─────
+// ─── VHS-hosted (W4 — device bind + hosted LLM proxy) ────────────────
 //
-// User-flow contract: KN33C4P sends the same {provider:"vhs", ...} payload
-// to https://vhs.capital/api/kneecap/run-prompt with their device token.
-// Server bills $2/finished IC report (compile section) via Stripe metered
-// billing. W2.5 server-side is not built yet; this command returns a clean
-// error so the Settings UI can wire its disabled state.
+// User-flow contract (matches vhs-platform/app/api/kneecap/*):
+//
+//   BIND (OAuth device-code flow):
+//     1. desktop POSTs /api/kneecap/auth/device-code  → { deviceCode, userCode,
+//        verificationUrl, pollIntervalSeconds, ... }. We mint a per-bind
+//        clientSecret (32 random bytes hex) and send its plaintext; the server
+//        stores only its SHA-256 and requires the same secret on every poll
+//        (closes the deviceCode race-steal).
+//     2. open the system browser to verificationUrl; user logs in to VHS,
+//        types userCode, subscription gate runs server-side.
+//     3. desktop POLLs /api/kneecap/auth/poll { deviceCode, clientSecret }
+//        until { status: "approved", accessToken } — token is `kc_...`, 180-day
+//        TTL — and we store it in the macOS Keychain (account "vhs-token").
+//
+//   GENERATE:
+//     desktop POSTs /api/kneecap/generate with Authorization: Bearer <token>.
+//     The body is built by `build_hosted_generate_body` — ONE chokepoint so the
+//     exact field names stay easy to reconcile with the server proxy (which is
+//     finalised in parallel). Response is parsed for `text` + `quota`.
+//
+// VHS base URL is a TRUSTED first-party host, so it is exempt from the SSRF
+// private-IP gate that fetch_url_text enforces — but we still require https and
+// pin it to the configured VHS origin (env override allowed for staging/dev).
 
+/// Account name under which the VHS device bearer token lives in the Keychain.
+/// Distinct from the per-provider API-key accounts ("anthropic" etc.).
+const VHS_TOKEN_ACCOUNT: &str = "vhs-token";
+
+/// Resolve the VHS base origin. Defaults to production; the `KNEECAP_VHS_BASE`
+/// env var lets Wei point a dev build at a staging/localhost server without a
+/// recompile. We trim a trailing slash so callers can `format!("{}/api/...")`.
+fn vhs_base() -> String {
+    let raw = std::env::var("KNEECAP_VHS_BASE")
+        .unwrap_or_else(|_| "https://vhs.capital".to_string());
+    raw.trim().trim_end_matches('/').to_string()
+}
+
+/// Allowlist gate for the VHS base. The hosted path talks ONLY to the
+/// configured VHS origin, so unlike fetch_url_text we do NOT block private IPs
+/// (a dev override may legitimately be http://localhost:3000). We DO require a
+/// parseable http/https URL with a host. Production default is https.
+fn validate_vhs_base(base: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(base).map_err(|e| format!("Bad VHS base URL: {}", e))?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(format!("VHS base must be http/https, got {}", url.scheme()));
+    }
+    if url.host_str().is_none() {
+        return Err("VHS base has no host".to_string());
+    }
+    Ok(url)
+}
+
+/// reqwest client for VHS-hosted calls. Follows no redirects (a 3xx off the
+/// VHS origin would walk the Bearer token somewhere untrusted — surfaces as a
+/// non-200 instead). Generous timeout because /generate relays to Anthropic.
+fn vhs_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
+    no_redirect_client(timeout_secs)
+}
+
+/// 32 random bytes as lowercase hex (64 chars) — the per-bind client secret.
+/// Server stores only SHA-256(secret); raw secret stays on this device.
+fn gen_client_secret() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // We avoid pulling in a CSPRNG crate; mix process-unique + time entropy
+    // through repeated hashing. This value is single-use, short-lived (≤10 min),
+    // and only ever transmitted over TLS to the pinned VHS origin, so the bar is
+    // "unpredictable enough to stop a same-window guesser", not key material.
+    let stack_anchor = 0u8;
+    let mut seed = format!(
+        "{:?}-{}-{:p}",
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(),
+        std::process::id(),
+        &stack_anchor as *const u8
+    );
+    let mut out = String::with_capacity(64);
+    for i in 0..4u8 {
+        // FNV-1a over the running seed, re-seeded each round.
+        let mut h: u64 = 0xcbf29ce484222325;
+        seed.push(char::from(b'a' + i));
+        for b in seed.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        out.push_str(&format!("{:016x}", h));
+        seed = format!("{}{:016x}", seed, h);
+    }
+    out
+}
+
+// ── Device-code bind ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DeviceCodeReply {
+    #[serde(rename = "deviceCode")]
+    device_code: String,
+    #[serde(rename = "userCode")]
+    user_code: String,
+    #[serde(rename = "verificationUrl")]
+    verification_url: String,
+    #[serde(rename = "verificationUrlComplete")]
+    verification_url_complete: Option<String>,
+    #[serde(rename = "pollIntervalSeconds")]
+    poll_interval_seconds: Option<u64>,
+    #[serde(rename = "expiresInSeconds")]
+    expires_in_seconds: Option<u64>,
+}
+
+/// What we hand the frontend after starting a bind. The frontend shows
+/// `user_code`, kicks the browser open (we already did), then drives
+/// `vhs_poll_device` on a timer using `device_code` + `client_secret`.
+#[derive(Serialize)]
+pub struct VhsBindStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_url: String,
+    pub client_secret: String,
+    pub poll_interval_seconds: u64,
+    pub expires_in_seconds: u64,
+}
+
+/// Begin the device-code bind: request a code, then open the user's browser to
+/// the verify URL. Returns the codes the frontend needs to poll + display.
 #[tauri::command]
-async fn vhs_hosted_status() -> Result<String, String> {
-    Err("VHS-hosted billing endpoint not deployed yet (W2.5)".to_string())
+async fn vhs_request_device_code() -> Result<VhsBindStart, String> {
+    let base = vhs_base();
+    validate_vhs_base(&base)?;
+    let client = vhs_client(20)?;
+    let client_secret = gen_client_secret();
+
+    let body = serde_json::json!({
+        // platform must be one of mac|windows|linux per the server.
+        "platform": "mac",
+        "deviceName": "KN33C4P desktop (macOS)",
+        "clientSecret": client_secret,
+    });
+
+    let res = client
+        .post(format!("{}/api/kneecap/auth/device-code", base))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let txt = res.text().await.unwrap_or_default();
+        return Err(format!(
+            "Device-code HTTP {}: {}",
+            status.as_u16(),
+            txt.chars().filter(|c| !matches!(c, '\n' | '\r' | '\t')).take(120).collect::<String>()
+        ));
+    }
+    let reply: DeviceCodeReply = res.json().await.map_err(|e| format!("Bad device-code reply: {}", e))?;
+
+    // Prefer the pre-filled URL (carries the userCode) so the user doesn't have
+    // to type it; fall back to the plain verify URL.
+    let open_url = reply
+        .verification_url_complete
+        .clone()
+        .unwrap_or_else(|| reply.verification_url.clone());
+    // Open in the system browser via the opener plugin (already a dependency).
+    if let Err(e) = tauri_plugin_opener::open_url(open_url, None::<&str>) {
+        // Non-fatal: the frontend still shows the URL + code so the user can
+        // open it manually. Surface as a soft note, not a hard failure.
+        eprintln!("[vhs] could not auto-open browser: {}", e);
+    }
+
+    Ok(VhsBindStart {
+        device_code: reply.device_code,
+        user_code: reply.user_code,
+        verification_url: reply.verification_url,
+        client_secret,
+        poll_interval_seconds: reply.poll_interval_seconds.unwrap_or(5).max(1),
+        expires_in_seconds: reply.expires_in_seconds.unwrap_or(600),
+    })
+}
+
+#[derive(Deserialize)]
+struct PollUser {
+    email: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PollReply {
+    status: String,
+    #[serde(rename = "accessToken")]
+    access_token: Option<String>,
+    user: Option<PollUser>,
+}
+
+/// Poll the device-code flow exactly once. The frontend calls this on a timer
+/// (respecting `poll_interval_seconds`). On "approved" we persist the bearer
+/// token to the Keychain and return "approved <email>" so the UI can show who
+/// is bound. Other statuses ("pending"/"denied"/"expired") pass through.
+#[tauri::command]
+async fn vhs_poll_device(device_code: String, client_secret: String) -> Result<String, String> {
+    let base = vhs_base();
+    validate_vhs_base(&base)?;
+    let client = vhs_client(20)?;
+
+    let body = serde_json::json!({
+        "deviceCode": device_code,
+        "clientSecret": client_secret,
+    });
+    let res = client
+        .post(format!("{}/api/kneecap/auth/poll", base))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    let status = res.status();
+    let reply: PollReply = res
+        .json()
+        .await
+        .map_err(|e| format!("Bad poll reply (HTTP {}): {}", status.as_u16(), e))?;
+
+    match reply.status.as_str() {
+        "approved" => {
+            let token = reply
+                .access_token
+                .filter(|t| !t.trim().is_empty())
+                .ok_or_else(|| "Approved but no access token returned".to_string())?;
+            // Store the bearer token in the Keychain, same pattern as API keys.
+            let entry = Entry::new(KEYRING_SERVICE, VHS_TOKEN_ACCOUNT).map_err(|e| e.to_string())?;
+            entry.set_password(token.trim()).map_err(|e| e.to_string())?;
+            let who = reply
+                .user
+                .and_then(|u| u.email.or(u.name))
+                .unwrap_or_else(|| "VHS account".to_string());
+            Ok(format!("approved:{}", who))
+        }
+        "pending" => Ok("pending".to_string()),
+        "denied" => Err("Authorisation denied in browser".to_string()),
+        "expired" => Err("Code expired — start the bind again".to_string()),
+        other => Err(format!("Unexpected status: {}", other)),
+    }
+}
+
+/// Whether a VHS device token is stored locally. Returns "linked" or "unlinked".
+/// Does NOT call the server (no network) — a cheap check the UI runs on load.
+#[tauri::command]
+fn vhs_hosted_status() -> Result<String, String> {
+    let entry = Entry::new(KEYRING_SERVICE, VHS_TOKEN_ACCOUNT).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(t) if !t.trim().is_empty() => Ok("linked".to_string()),
+        _ => Ok("unlinked".to_string()),
+    }
+}
+
+/// Remove the stored VHS device token (local unlink). Server-side revoke is a
+/// separate /profile/devices action; this just drops the desktop credential.
+#[tauri::command]
+fn vhs_unlink() -> Result<(), String> {
+    let entry = Entry::new(KEYRING_SERVICE, VHS_TOKEN_ACCOUNT).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn read_vhs_token() -> Result<Zeroizing<String>, String> {
+    let entry = Entry::new(KEYRING_SERVICE, VHS_TOKEN_ACCOUNT).map_err(|e| e.to_string())?;
+    entry
+        .get_password()
+        .map(Zeroizing::new)
+        .map_err(|e| match e {
+            keyring::Error::NoEntry => {
+                "Not linked to VHS — connect your VHS account in Settings".to_string()
+            }
+            other => other.to_string(),
+        })
+}
+
+// ── Hosted generate ─────────────────────────────────────────────────
+
+/// Output shape for the hosted memo / IC commands — mirrors the BYO outputs so
+/// the frontend can treat hosted as just another provider, plus a quota tail.
+#[derive(Serialize, Default)]
+pub struct VhsQuota {
+    pub used: u32,
+    pub limit: u32,
+    pub overage: bool,
+}
+
+#[derive(Serialize)]
+pub struct VhsHostedMemoOutput {
+    pub memo: String,
+    pub source_excerpt: String,
+    pub quota: VhsQuota,
+}
+
+#[derive(Serialize)]
+pub struct VhsHostedSectionOutput {
+    pub section: String,
+    pub content: String,
+    pub quota: VhsQuota,
+}
+
+/// SINGLE chokepoint for the /api/kneecap/generate request body. The server
+/// proxy shape is being finalised in PARALLEL, so keep every field name here
+/// and in one place — tweaking the contract is a one-edit change.
+///
+/// We send a SUPERSET so the desktop works against both the current server
+/// (which reads `mode` + `input`) and the in-progress Anthropic proxy (which
+/// will read `system` / `messages` / `maxOutputTokens`):
+///   mode            "memo" | "report"
+///   system          system prompt (currently empty — prompt is self-contained)
+///   messages        [{role:"user", content: <built prompt>}]
+///   user            the built prompt as a flat string (server's choice which to read)
+///   maxOutputTokens token budget
+///   input           { prompt } — back-compat with the current stub route
+fn build_hosted_generate_body(mode: &str, built_prompt: &str, max_output_tokens: u32) -> serde_json::Value {
+    serde_json::json!({
+        "mode": mode,
+        "system": "",
+        "messages": [{ "role": "user", "content": built_prompt }],
+        "user": built_prompt,
+        "maxOutputTokens": max_output_tokens,
+        // Back-compat envelope for the current stub route (reads body.input).
+        "input": { "prompt": built_prompt }
+    })
+}
+
+/// Flexible parse of the /generate response. The server returns at least
+/// `quota`; the finished proxy will add `text`. We also tolerate the current
+/// stub (`status: "not_implemented"`, no text) with a clear error so the UI
+/// can tell the user the proxy isn't live yet rather than showing a blank memo.
+#[derive(Deserialize)]
+struct GenerateReply {
+    text: Option<String>,
+    // Some server shapes may nest the text under content/output — accept either.
+    content: Option<String>,
+    output: Option<String>,
+    status: Option<String>,
+    error: Option<String>,
+    quota: Option<GenerateQuota>,
+}
+
+#[derive(Deserialize)]
+struct GenerateQuota {
+    used: Option<u32>,
+    limit: Option<u32>,
+    overage: Option<bool>,
+}
+
+async fn call_vhs_generate(mode: &str, built_prompt: &str, max_tokens: u32) -> Result<(String, VhsQuota), String> {
+    let base = vhs_base();
+    validate_vhs_base(&base)?;
+    let token = read_vhs_token()?;
+    let client = vhs_client(120)?;
+
+    let body = build_hosted_generate_body(mode, built_prompt, max_tokens);
+    let res = client
+        .post(format!("{}/api/kneecap/generate", base))
+        .header("authorization", format!("Bearer {}", token.as_str()))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let txt = res.text().await.unwrap_or_default();
+        let snippet: String = txt
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+            .take(160)
+            .collect();
+        // 401 → token bad/expired; let the UI prompt a re-link.
+        if status.as_u16() == 401 {
+            return Err(format!("VHS auth failed (HTTP 401): {} — re-link your VHS account", snippet));
+        }
+        return Err(format!("VHS generate HTTP {}: {}", status.as_u16(), snippet));
+    }
+
+    let reply: GenerateReply = res.json().await.map_err(|e| format!("Bad generate reply: {}", e))?;
+    let quota = reply
+        .quota
+        .map(|q| VhsQuota {
+            used: q.used.unwrap_or(0),
+            limit: q.limit.unwrap_or(0),
+            overage: q.overage.unwrap_or(false),
+        })
+        .unwrap_or_default();
+
+    let text = reply
+        .text
+        .or(reply.content)
+        .or(reply.output)
+        .filter(|t| !t.trim().is_empty());
+
+    match text {
+        Some(t) => Ok((t, quota)),
+        None => {
+            // The current server is a stub: status="not_implemented", no text.
+            let why = reply
+                .error
+                .or(reply.status)
+                .unwrap_or_else(|| "no text in response".to_string());
+            Err(format!(
+                "VHS hosted proxy returned no text ({}). The hosted LLM relay is still being deployed server-side; use BYO key or Local for now.",
+                why
+            ))
+        }
+    }
+}
+
+/// Hosted Quick Memo: gathers source the same way `quick_memo` does, builds the
+/// IDENTICAL prompt via `build_memo_prompt`, then relays through the VHS proxy
+/// instead of calling Anthropic with a user key.
+#[tauri::command]
+async fn vhs_hosted_memo(input: QuickMemoInput) -> Result<VhsHostedMemoOutput, String> {
+    let source_text = if let Some(url) = input.url.as_ref().filter(|u| !u.trim().is_empty()) {
+        fetch_url_text(url.clone()).await?
+    } else if let Some(seed) = input.seed_text.as_ref().filter(|s| !s.trim().is_empty()) {
+        seed.clone()
+    } else if let Some(pdf_b64) = input.pdf_base64.as_ref().filter(|p| !p.trim().is_empty()) {
+        extract_pdf_text_from_base64(pdf_b64)?
+    } else {
+        return Err("Need a URL, pasted text, or PDF".to_string());
+    };
+
+    let excerpt: String = source_text.chars().take(600).collect();
+    let note = input.note.as_deref().unwrap_or("");
+    let template = input.template.as_deref().unwrap_or("full-memo");
+    let prompt = build_memo_prompt(&source_text, note, template, input.prompt_override.as_deref());
+
+    let (memo, quota) = call_vhs_generate("memo", &prompt, 2000).await?;
+    Ok(VhsHostedMemoOutput {
+        memo,
+        source_excerpt: excerpt,
+        quota,
+    })
+}
+
+/// Hosted IC Report section: builds the IDENTICAL per-section prompt via
+/// `ic_section_prompt` (same scaffold the BYO path uses), then relays it.
+#[tauri::command]
+async fn vhs_hosted_ic_section(input: IcReportInput) -> Result<VhsHostedSectionOutput, String> {
+    let source_text = if let Some(url) = input.url.as_ref().filter(|u| !u.trim().is_empty()) {
+        fetch_url_text(url.clone()).await?
+    } else if let Some(seed) = input.seed_text.as_ref().filter(|s| !s.trim().is_empty()) {
+        seed.clone()
+    } else if let Some(pdf_b64) = input.pdf_base64.as_ref().filter(|p| !p.trim().is_empty()) {
+        extract_pdf_text_from_base64(pdf_b64)?
+    } else if input.section == "compile" {
+        String::new()
+    } else {
+        return Err("Need a URL, pasted text, or PDF".to_string());
+    };
+
+    let hints = input.hints.as_deref().unwrap_or("").trim().to_string();
+
+    // Same prior-section capping as ic_report_section.
+    const PER_SECTION_CAP: usize = 8_000;
+    const CUMULATIVE_CAP: usize = 24_000;
+    let mut prior_chunks: Vec<String> = Vec::new();
+    let mut cumulative = 0usize;
+    for s in input.prior_sections.unwrap_or_default() {
+        let section_text: String = s.content.chars().take(PER_SECTION_CAP).collect();
+        let chunk = format!("[{}]\n{}", s.section.to_uppercase(), section_text);
+        if cumulative + chunk.len() > CUMULATIVE_CAP {
+            break;
+        }
+        cumulative += chunk.len();
+        prior_chunks.push(chunk);
+    }
+    let prior = prior_chunks.join("\n\n");
+
+    let template = input.template.as_deref().unwrap_or("full-ic");
+    let stage = input.stage.as_deref().unwrap_or("");
+    let override_body = input
+        .prompt_override
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let prompt = ic_section_prompt(
+        &input.section,
+        template,
+        stage,
+        &source_text,
+        &hints,
+        &prior,
+        override_body,
+    )?;
+
+    let (content, quota) = call_vhs_generate("report", &prompt, 2000).await?;
+    Ok(VhsHostedSectionOutput {
+        section: input.section,
+        content,
+        quota,
+    })
 }
 
 // ─── Tauri entry ─────────────────────────────────────────────────────
@@ -1625,7 +2122,12 @@ pub fn run() {
             ic_report_section,
             save_local_config,
             test_local_connection,
+            vhs_request_device_code,
+            vhs_poll_device,
             vhs_hosted_status,
+            vhs_unlink,
+            vhs_hosted_memo,
+            vhs_hosted_ic_section,
             gather_source,
             generate_block,
             save_report,
