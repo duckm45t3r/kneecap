@@ -1801,8 +1801,23 @@ a:hover {
 
 .kn-ed-style-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+}
+
+/* minmax(0,1fr) + min-width:0 lets the columns shrink below the select's
+   min-content so the right column (SIZE / ACCENT / WIDTH) can't poke out past
+   the 240px inspector. The selects fill their column instead of overflowing. */
+.kn-ed-style-grid > * {
+  min-width: 0;
+}
+
+.kn-ed-style-grid select,
+.kn-ed-style-grid input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .kn-ed-seg {
@@ -2023,4 +2038,248 @@ a:hover {
   background: rgba(192, 80, 70, 0.08);
   padding: 6px 10px;
   border-radius: 4px;
+}
+
+/* ── W5: hosted usage gauge ──────────────────────────────────────── */
+
+.kn-ed-palette-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.kn-ed-block-count {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--vhs-paper-dim);
+  margin-left: 8px;
+}
+
+.kn-ed-block-cap-note {
+  font-size: 11px;
+  color: var(--vhs-gold);
+  padding: 2px 2px 0;
+}
+
+.kn-home-usage {
+  margin-top: 28px;
+  max-width: 420px;
+}
+
+/* Sidebar footer pins the compact gauge to the bottom of the column. */
+.kn-sidebar-footer {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--vhs-hairline);
+}
+
+.kn-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kn-usage--panel {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 16px 18px;
+}
+
+.kn-usage--compact {
+  gap: 6px;
+}
+
+.kn-usage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kn-usage-eyebrow {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+}
+
+.kn-usage-help {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--vhs-hairline);
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.kn-usage-help:hover {
+  color: var(--vhs-paper);
+  border-color: var(--vhs-gold-dim);
+}
+
+.kn-usage-count {
+  font-size: 13px;
+  color: var(--vhs-paper-dim);
+}
+
+.kn-usage-count strong {
+  color: var(--vhs-paper);
+}
+
+.kn-usage--compact .kn-usage-count {
+  font-size: 12px;
+}
+
+.kn-usage-month {
+  color: var(--vhs-paper-faint);
+}
+
+.kn-usage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  overflow: hidden;
+}
+
+.kn-usage-bar-fill {
+  height: 100%;
+  background: var(--vhs-teal);
+  transition: width 0.3s ease;
+}
+
+.kn-usage-bar-fill--full {
+  background: var(--vhs-gold);
+}
+
+.kn-usage-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--vhs-paper-faint);
+}
+
+.kn-usage--compact .kn-usage-note {
+  font-size: 11px;
+}
+
+.kn-usage-note--limit {
+  color: var(--vhs-gold);
+}
+
+/* ── W5: usage guide modal ───────────────────────────────────────── */
+
+.kn-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.kn-modal {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  padding: 24px 26px;
+}
+
+.kn-usage-guide {
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kn-usage-guide-title {
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper);
+  margin: 0;
+}
+
+.kn-usage-guide p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--vhs-paper-dim);
+  margin: 0;
+}
+
+.kn-usage-guide strong {
+  color: var(--vhs-paper);
+}
+
+.kn-usage-guide .kn-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.kn-btn--ghost {
+  background: transparent;
+}
+
+/* ── Format Learning ───────────────────────────────────────────────── */
+
+.kn-fl {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kn-fl-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-fl-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.kn-fl-file-name {
+  color: var(--vhs-paper);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-fl-file-x {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-mute);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.kn-fl-file-x:hover:not(:disabled) {
+  color: var(--vhs-crimson);
+}
+
+.kn-fl-file-x:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

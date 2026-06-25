@@ -73,3 +73,9 @@ export type Template = {
   page: { font: BlockFont; accent: BlockAccent; showLogo: boolean };
   blocks: Block[];
 };
+
+// W5 — hard ceiling on blocks per template. A hosted template run fires one LLM
+// call per generated block, so this caps both designer complexity and the
+// number of hosted calls a single report can make. Enforced in the designer
+// (disable the add control) and guarded again at generation time.
+export const MAX_TEMPLATE_BLOCKS = 15;

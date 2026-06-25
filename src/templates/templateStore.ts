@@ -1,4 +1,16 @@
-import type { Block, BlockType, Template } from "./types";
+import type {
+  Block,
+  BlockAccent,
+  BlockContent,
+  BlockFont,
+  BlockSize,
+  BlockStyle,
+  BlockType,
+  Template,
+  TemplateKind,
+  TemplateVariant,
+} from "./types";
+import { MAX_TEMPLATE_BLOCKS } from "./types";
 import { STARTER_TEMPLATES } from "./starters";
 
 // User-forked templates live in localStorage (interim store — moves to the
@@ -160,5 +172,141 @@ export function newBlock(type: BlockType): Block {
     content: isStatic
       ? { mode: "static", text: type === "logo" ? "Firm logo" : "" }
       : { mode: "generated", prompt: DEFAULT_PROMPT[type] ?? "" },
+  };
+}
+
+// ─── Format Learning — validate a model-inferred template ──────────────
+//
+// The `infer_templates` Rust command sends each example doc to the LLM and asks
+// it to EMIT a kneecap Template as JSON (schema spelled out in the prompt). The
+// model is not trustworthy about the schema, so we never `as Template` raw JSON
+// — we walk it field by field, coercing/clamping every value into the real
+// types and assigning ids ourselves. Anything we can't make valid throws, and
+// the Format Learning UI skips just that one example.
+
+const BLOCK_TYPES: readonly BlockType[] = [
+  "cover",
+  "heading",
+  "paragraph",
+  "bullets",
+  "metrics",
+  "chart",
+  "table",
+  "scoreBox",
+  "logo",
+  "divider",
+];
+const FONTS: readonly BlockFont[] = ["editorial", "sans", "mono"];
+const ACCENTS: readonly BlockAccent[] = ["paper", "gold", "teal", "crimson"];
+const SIZES: readonly BlockSize[] = ["sm", "md", "lg", "xl"];
+const WEIGHTS = ["regular", "medium", "bold"] as const;
+const ALIGNS = ["left", "center"] as const;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function asStr(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+function oneOf<T extends string>(v: unknown, allowed: readonly T[]): T | undefined {
+  return typeof v === "string" && (allowed as readonly string[]).includes(v)
+    ? (v as T)
+    : undefined;
+}
+
+function normaliseStyle(v: unknown): BlockStyle | undefined {
+  if (!isRecord(v)) return undefined;
+  const style: BlockStyle = {};
+  const font = oneOf(v.font, FONTS);
+  if (font) style.font = font;
+  const size = oneOf(v.size, SIZES);
+  if (size) style.size = size;
+  const weight = oneOf(v.weight, WEIGHTS);
+  if (weight) style.weight = weight;
+  const align = oneOf(v.align, ALIGNS);
+  if (align) style.align = align;
+  const accent = oneOf(v.accent, ACCENTS);
+  if (accent) style.accent = accent;
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function normaliseContent(v: unknown, type: BlockType): BlockContent {
+  if (isRecord(v)) {
+    if (v.mode === "static") {
+      return { mode: "static", text: asStr(v.text) ?? "" };
+    }
+    if (v.mode === "generated") {
+      const prompt = asStr(v.prompt)?.trim();
+      if (prompt) return { mode: "generated", prompt };
+    }
+    // A `prompt` with no/garbled mode → treat as generated.
+    const loosePrompt = asStr(v.prompt)?.trim();
+    if (loosePrompt) return { mode: "generated", prompt: loosePrompt };
+    const looseText = asStr(v.text);
+    if (looseText != null) return { mode: "static", text: looseText };
+  }
+  // Fall back to the type's sensible default content.
+  return type === "logo" || type === "divider"
+    ? { mode: "static", text: type === "logo" ? "Firm logo" : "" }
+    : { mode: "generated", prompt: DEFAULT_PROMPT[type] ?? "Write this section from the source." };
+}
+
+function normaliseBlock(v: unknown): Block | null {
+  if (!isRecord(v)) return null;
+  const type = oneOf(v.type, BLOCK_TYPES);
+  if (!type) return null; // unknown block type → drop this block
+  const label = asStr(v.label)?.trim() || BLOCK_TYPE_META[type].label;
+  const width: "full" | "half" = v.width === "half" ? "half" : "full";
+  const style = normaliseStyle(v.style);
+  const block: Block = {
+    id: uid("blk"),
+    type,
+    label,
+    width,
+    content: normaliseContent(v.content, type),
+  };
+  if (style) block.style = style;
+  return block;
+}
+
+/**
+ * Coerce arbitrary parsed JSON (from the model) into a valid custom Template,
+ * assigning fresh ids. `fallbackName` (the example filename) is used when the
+ * model omits a name. Throws if the JSON has no usable blocks at all.
+ */
+export function templateFromInferred(raw: unknown, fallbackName: string): Template {
+  if (!isRecord(raw)) {
+    throw new Error("Model did not return a template object");
+  }
+  const rawBlocks = Array.isArray(raw.blocks) ? raw.blocks : [];
+  const blocks = rawBlocks
+    .map(normaliseBlock)
+    .filter((b): b is Block => b !== null)
+    .slice(0, MAX_TEMPLATE_BLOCKS);
+  if (blocks.length === 0) {
+    throw new Error("No recognisable blocks in the model's template");
+  }
+
+  const kind: TemplateKind = oneOf(raw.kind, ["memo", "ic"] as const) ?? "memo";
+  const variant: TemplateVariant =
+    oneOf(raw.variant, ["simple", "full"] as const) ?? "full";
+
+  const page = isRecord(raw.page) ? raw.page : {};
+  const pageFont = oneOf(page.font, FONTS) ?? "editorial";
+  const pageAccent = oneOf(page.accent, ACCENTS) ?? "paper";
+  const showLogo = typeof page.showLogo === "boolean" ? page.showLogo : false;
+
+  const name = asStr(raw.name)?.trim() || `Learned — ${fallbackName}`;
+  const description =
+    asStr(raw.description)?.trim() || `Learned from ${fallbackName}.`;
+
+  return {
+    id: uid("custom"),
+    name,
+    kind,
+    variant,
+    description,
+    page: { font: pageFont, accent: pageAccent, showLogo },
+    blocks,
   };
 }

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { SavedReport } from "./reports/reportStore";
 import type { Template } from "./templates/types";
 import { isStarter } from "./templates/templateStore";
@@ -47,6 +48,7 @@ export function Sidebar({
   onOpenReport,
   onDeleteReport,
   onGenerateTemplate,
+  usageSlot,
 }: {
   activeNav: SidebarNav | null;
   selectedReportId: string | null;
@@ -56,6 +58,9 @@ export function Sidebar({
   onOpenReport: (id: string) => void;
   onDeleteReport: (id: string) => void;
   onGenerateTemplate: (id: string) => void;
+  // W5: hosted usage gauge (compact). Rendered by App so the gauge logic stays
+  // in one place; null when VHS isn't linked.
+  usageSlot?: ReactNode;
 }) {
   return (
     <aside className="kn-sidebar">
@@ -146,6 +151,8 @@ export function Sidebar({
           ))}
         </ul>
       </div>
+
+      {usageSlot && <div className="kn-sidebar-footer">{usageSlot}</div>}
     </aside>
   );
 }

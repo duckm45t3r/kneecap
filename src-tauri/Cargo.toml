@@ -28,7 +28,14 @@ tauri-plugin-opener = "=2.5.4"
 # set in tauri.conf.json so the project compiles + cargo check passes; the
 # updater will reject real update manifests until the placeholder is replaced.
 tauri-plugin-updater = "=2.10.1"
-serde = { version = "=1.0.219", features = ["derive"] }
+# Report export (PDF / DOCX): native "Save As" dialog so a VC picks the
+# location/filename. We use ONLY the dialog plugin's save picker — the actual
+# byte write goes through our own hand-rolled `save_export_file` command +
+# std::fs, deliberately staying off tauri-plugin-fs's ACL (same posture as the
+# saved-report commands). DOCX bytes are built client-side by the `docx` JS lib;
+# PDF uses the webview's print-to-PDF (no extra crate).
+tauri-plugin-dialog = "=2.7.1"
+serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = "=1.0.140"
 keyring = { version = "=3.6.3", features = ["apple-native"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }

@@ -7,6 +7,7 @@ import type {
   BlockType,
   Template,
 } from "./types";
+import { MAX_TEMPLATE_BLOCKS } from "./types";
 import {
   BLOCK_TYPE_META,
   newBlock,
@@ -91,7 +92,12 @@ export function TemplateDesigner({
     updateBlock(id, { style: { ...b.style, ...patch } });
   };
 
+  const atBlockCap = draft.blocks.length >= MAX_TEMPLATE_BLOCKS;
+
   const addBlock = (type: BlockType) => {
+    // Guard the cap here too — a stray call can't push past the ceiling even if
+    // the disabled palette button is somehow triggered.
+    if (draft.blocks.length >= MAX_TEMPLATE_BLOCKS) return;
     const b = newBlock(type);
     mutate({ ...draft, blocks: [...draft.blocks, b] });
     setSelectedId(b.id);
@@ -146,15 +152,29 @@ export function TemplateDesigner({
             />
           </label>
 
-          <div className="kn-ed-side-label">Add a block</div>
+          <div className="kn-ed-side-label">
+            Add a block
+            <span className="kn-ed-block-count">
+              {draft.blocks.length}/{MAX_TEMPLATE_BLOCKS}
+            </span>
+          </div>
           <div className="kn-ed-palette">
             {PALETTE.map((t) => (
-              <button key={t} className="kn-ed-palette-btn" onClick={() => addBlock(t)}>
+              <button
+                key={t}
+                className="kn-ed-palette-btn"
+                onClick={() => addBlock(t)}
+                disabled={atBlockCap}
+                title={atBlockCap ? `Max ${MAX_TEMPLATE_BLOCKS} blocks` : ""}
+              >
                 <span className="kn-ed-palette-icon">{BLOCK_TYPE_META[t].icon}</span>
                 {BLOCK_TYPE_META[t].label}
               </button>
             ))}
           </div>
+          {atBlockCap && (
+            <div className="kn-ed-block-cap-note">Max {MAX_TEMPLATE_BLOCKS} blocks</div>
+          )}
 
           <div className="kn-ed-side-label">Page style</div>
           <label className="kn-ed-field">
