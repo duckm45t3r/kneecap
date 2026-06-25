@@ -2084,7 +2084,8 @@ fn build_hosted_generate_body(
     built_prompt: &str,
     max_output_tokens: u32,
     report_id: &str,
-    pdf_b64: Option<&str>,
+    pdfs: &[String],
+    pdf_refs: &[String],
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "mode": mode,
@@ -2097,11 +2098,30 @@ fn build_hosted_generate_body(
         // Back-compat envelope for the current stub route (reads body.input).
         "input": { "prompt": built_prompt }
     });
-    // Optional native PDF: raw base64 (NO "data:...;base64," prefix) per the
-    // hosted contract. When present the server sends Anthropic a [document,text]
-    // content array so Claude reads the real deck; absent → text-only, unchanged.
-    if let Some(pdf) = pdf_b64 {
-        body["pdf"] = serde_json::Value::String(pdf.to_string());
+    // Optional INLINE native PDFs: raw base64 (NO "data:...;base64," prefix) per
+    // the hosted contract. Only SMALL PDFs (≤ INLINE_MAX_DECODED) ride here so the
+    // body stays under Vercel's ~4.5MB limit. When present the server sends
+    // Anthropic a [document, ..., text] content array; empty → text-only,
+    // unchanged. We omit the key entirely when empty so the text-only path is
+    // byte-identical to before.
+    if !pdfs.is_empty() {
+        body["pdfs"] = serde_json::Value::Array(
+            pdfs.iter()
+                .map(|p| serde_json::Value::String(p.clone()))
+                .collect(),
+        );
+    }
+    // Optional OVERSIZED PDFs: object-storage KEYS the desktop already uploaded
+    // out of band via a presigned PUT. The server fetches each blob, base64s it,
+    // and merges it into the SAME document-block array the inline pdfs feed. Omit
+    // the key when empty so a no-big-PDF request is byte-identical to before.
+    if !pdf_refs.is_empty() {
+        body["pdfRefs"] = serde_json::Value::Array(
+            pdf_refs
+                .iter()
+                .map(|k| serde_json::Value::String(k.clone()))
+                .collect(),
+        );
     }
     body
 }
@@ -2140,19 +2160,185 @@ struct GenerateQuota {
     overage: Option<bool>,
 }
 
+/// Desktop-side mirror of the server's hosted-PDF caps. Reject too many / too
+/// large PDFs HERE so the user sees a friendly message instead of a raw 413 from
+/// the proxy. Kept in sync with route.ts (MAX_PDF_COUNT / MAX_PDF_DECODED_BYTES /
+/// MAX_PDF_TOTAL_DECODED_BYTES).
+const HOSTED_MAX_PDF_COUNT: usize = 10;
+/// Per-PDF hosted cap (DECODED bytes). DECOUPLED from MAX_FETCH_BODY_BYTES (the
+/// 5MB url-fetch / BYO cap, unchanged): a hosted PDF can be up to 25MB because
+/// big ones go via presign+upload, not through the 4.5MB Vercel body.
+const HOSTED_MAX_PDF_DECODED_BYTES: usize = 25 * 1024 * 1024; // 25MB per PDF
+const HOSTED_MAX_PDF_TOTAL_DECODED_BYTES: usize = 30 * 1024 * 1024; // 30MB summed
+
+/// INLINE vs PRESIGN threshold (DECODED bytes). A native PDF ≤ this stays inline
+/// as base64 in the body's `pdfs[]` (the fast path: ~3MB decoded ≈ ~4MB base64,
+/// which leaves room for the prompt + envelope under Vercel's ~4.5MB body limit).
+/// A PDF LARGER than this is uploaded OUT OF BAND via a presigned PUT and sent to
+/// /generate as a small `pdfRefs[]` object key instead. This also fixes the known
+/// Vercel blocker where a single ~5MB PDF base64'd to ~6.7MB blew the body limit.
+const INLINE_MAX_DECODED: usize = 3 * 1024 * 1024; // 3MB decoded
+
+/// RUNNING BASE64 BODY BUDGET for the inline `pdfs[]` path. The inline/presign
+/// decision is NOT just per-PDF: Vercel caps the WHOLE /generate request body at
+/// ~4.5MB, and several sub-3MB PDFs still overflow it (e.g. 2×2.9MB ≈ 7.7MB of
+/// base64). So we greedily keep a PDF inline only while the PROJECTED inline body
+/// stays under a safe cap. Projected inline body ≈ Σ over inline PDFs of their
+/// base64 size (ceil(decoded_len/3)*4) + a fixed reserve for the prompt/envelope.
+/// Anything that would push the projection over the budget is routed to presign.
+const INLINE_BODY_BUDGET_BYTES: usize = 4_000_000; // total projected body cap
+const INLINE_BODY_RESERVE_BYTES: usize = 600_000; // prompt/envelope headroom
+
+/// Base64-encoded size of `decoded_len` raw bytes: ceil(n/3)*4.
+fn base64_len(decoded_len: usize) -> usize {
+    ((decoded_len + 2) / 3) * 4
+}
+
+/// Guard the hosted PDF list against the count + per-PDF + aggregate-size caps
+/// before we hit the network, so the user sees a friendly message instead of a
+/// raw 413. Decodes each base64 to measure the TRUE decoded size and enforces
+/// the 25MB-per-PDF hosted cap directly (NOT decode_pdf_base64, whose 5MB cap is
+/// the url-fetch / BYO limit and would wrongly reject a legitimate big deck).
+///
+/// `pdfs` here is the INLINE list — by the time `call_vhs_generate` runs, the
+/// caller has already partitioned oversized PDFs out to the presign path, so in
+/// practice these are all ≤3MB. The 25MB cap is the belt-and-braces server
+/// mirror in case a caller hands an un-partitioned list.
+fn guard_hosted_pdfs(pdfs: &[String]) -> Result<(), String> {
+    if pdfs.len() > HOSTED_MAX_PDF_COUNT {
+        return Err(format!(
+            "Too many PDFs for hosted mode ({} — max {}). Remove some decks, or paste text, or use a BYO key.",
+            pdfs.len(),
+            HOSTED_MAX_PDF_COUNT
+        ));
+    }
+    let mut total = 0usize;
+    for pdf in pdfs {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(pdf.trim())
+            .map_err(|e| format!("Invalid base64 PDF: {}", e))?;
+        if bytes.len() > HOSTED_MAX_PDF_DECODED_BYTES {
+            return Err(format!(
+                "A PDF is too large for hosted mode (max {} MB each). Use a BYO key for very large decks.",
+                HOSTED_MAX_PDF_DECODED_BYTES / (1024 * 1024)
+            ));
+        }
+        total += bytes.len();
+        if total > HOSTED_MAX_PDF_TOTAL_DECODED_BYTES {
+            return Err(format!(
+                "PDFs too large for hosted mode in aggregate (max {} MB total). Remove some decks, or use a BYO key.",
+                HOSTED_MAX_PDF_TOTAL_DECODED_BYTES / (1024 * 1024)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// One {key, putUrl} the server minted for an oversized-PDF upload.
+#[derive(Deserialize)]
+struct PresignUpload {
+    key: String,
+    #[serde(rename = "putUrl")]
+    put_url: String,
+}
+
+#[derive(Deserialize)]
+struct PresignReply {
+    uploads: Vec<PresignUpload>,
+}
+
+/// Upload OVERSIZED PDFs (> INLINE_MAX_DECODED) OUT OF BAND so they bypass the
+/// ~4.5MB Vercel body limit on /generate. Two steps:
+///   1. POST {count, sizes} to /api/kneecap/blob-presign (Bearer token) → the
+///      server mints a user-scoped key + a short-lived presigned PUT URL each.
+///   2. For each {key, putUrl}, PUT the raw PDF bytes straight to object storage
+///      with Content-Type: application/pdf.
+/// Returns the object KEYS, which the caller threads into /generate as pdf_refs;
+/// the proxy fetches each blob server-side and deletes it after the call.
+///
+/// `client` is the reqwest VHS client (no-redirect — a 3xx off the presign URL
+/// would be misconfiguration / MITM). The presigned PUT host is the storage
+/// endpoint, not the VHS origin, but it too is first-party and reached over TLS.
+async fn vhs_presign_and_upload(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    big: &[Vec<u8>],
+) -> Result<Vec<String>, String> {
+    if big.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sizes: Vec<usize> = big.iter().map(|b| b.len()).collect();
+    let body = serde_json::json!({ "count": big.len(), "sizes": sizes });
+
+    let res = client
+        .post(format!("{}/api/kneecap/blob-presign", base_url))
+        .header("authorization", format!("Bearer {}", token))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Presign network error: {}", e))?;
+    let status = res.status();
+    if !status.is_success() {
+        let txt = res.text().await.unwrap_or_default();
+        let snippet: String = txt
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+            .take(160)
+            .collect();
+        return Err(format!("Presign HTTP {}: {}", status.as_u16(), snippet));
+    }
+    let reply: PresignReply = res
+        .json()
+        .await
+        .map_err(|e| format!("Bad presign reply: {}", e))?;
+    if reply.uploads.len() != big.len() {
+        return Err(format!(
+            "Presign returned {} URLs for {} PDFs",
+            reply.uploads.len(),
+            big.len()
+        ));
+    }
+
+    let mut keys: Vec<String> = Vec::with_capacity(big.len());
+    for (upload, bytes) in reply.uploads.into_iter().zip(big.iter()) {
+        let put = client
+            .put(&upload.put_url)
+            .header("content-type", "application/pdf")
+            .body(bytes.clone())
+            .send()
+            .await
+            .map_err(|e| format!("Upload network error: {}", e))?;
+        if !put.status().is_success() {
+            let s = put.status();
+            return Err(format!("Upload HTTP {} for one PDF", s.as_u16()));
+        }
+        keys.push(upload.key);
+    }
+    Ok(keys)
+}
+
 async fn call_vhs_generate(
     mode: &str,
     built_prompt: &str,
     max_tokens: u32,
     report_id: &str,
-    pdf_b64: Option<&str>,
+    pdfs: &[String],
+    pdf_refs: &[String],
 ) -> Result<(String, VhsQuota), String> {
+    // Friendly pre-flight guard: bail with a clear message before the network
+    // call rather than letting the proxy answer 413. Guards the INLINE list; the
+    // oversized PDFs (pdf_refs) were already size-checked at partition time.
+    guard_hosted_pdfs(pdfs)?;
+
     let base = vhs_base();
     validate_vhs_base(&base)?;
     let token = read_vhs_token()?;
     let client = vhs_client(120)?;
 
-    let body = build_hosted_generate_body(mode, built_prompt, max_tokens, report_id, pdf_b64);
+    let body =
+        build_hosted_generate_body(mode, built_prompt, max_tokens, report_id, pdfs, pdf_refs);
     let res = client
         .post(format!("{}/api/kneecap/generate", base))
         .header("authorization", format!("Bearer {}", token.as_str()))
@@ -2251,8 +2437,13 @@ async fn vhs_hosted_memo(
     let template = input.template.as_deref().unwrap_or("full-memo");
     let prompt = build_memo_prompt(&source_text, note, template, input.prompt_override.as_deref());
 
+    // Single-source hosted path: wrap the 0/1 native PDF as a slice so it
+    // matches the multi-PDF signature. Behaviour unchanged.
+    let pdfs: Vec<String> = native_pdf.into_iter().collect();
+    // Single-source hosted path: one PDF, always small enough to stay inline, so
+    // no presign refs.
     let (memo, quota) =
-        call_vhs_generate("memo", &prompt, 2000, &report_id, native_pdf.as_deref()).await?;
+        call_vhs_generate("memo", &prompt, 2000, &report_id, &pdfs, &[]).await?;
     Ok(VhsHostedMemoOutput {
         memo,
         source_excerpt: excerpt,
@@ -2312,8 +2503,12 @@ async fn vhs_hosted_ic_section(
         override_body,
     )?;
 
+    // Single-source hosted path: wrap the 0/1 native PDF as a slice so it
+    // matches the multi-PDF signature. Behaviour unchanged.
+    let pdfs: Vec<String> = native_pdf.into_iter().collect();
+    // Single-source hosted path: one PDF, stays inline, no presign refs.
     let (content, quota) =
-        call_vhs_generate("report", &prompt, 2000, &report_id, native_pdf.as_deref()).await?;
+        call_vhs_generate("report", &prompt, 2000, &report_id, &pdfs, &[]).await?;
     Ok(VhsHostedSectionOutput {
         section: input.section,
         content,
@@ -2341,13 +2536,23 @@ async fn vhs_hosted_block(
     if prompt_trimmed.is_empty() {
         return Ok(String::new());
     }
-    let pdf_ref = pdf.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    // Single-source hosted path: wrap the 0/1 native PDF as a slice so it
+    // matches the multi-PDF signature. Behaviour unchanged.
+    let pdfs: Vec<String> = pdf
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| p.to_string())
+        .into_iter()
+        .collect();
+    // Single-source hosted path: one PDF, stays inline, no presign refs.
     let (text, _quota) = call_vhs_generate(
         "report",
         prompt_trimmed,
         max_tokens.unwrap_or(2000),
         &report_id,
-        pdf_ref,
+        &pdfs,
+        &[],
     )
     .await?;
     Ok(text)
@@ -3994,11 +4199,10 @@ async fn call_gemini_multi(
 
 /// Dispatch ONE generation call across the combined sources for a provider.
 /// `pdfs` is the set of native-PDF base64 blobs (empty for text-only providers,
-/// which already have everything in `combined_text`). For the hosted path each
-/// PDF is sent through call_vhs_generate (which takes a single optional PDF) by
-/// merging — but the deal generation path uses BYO/local providers; vhs is
-/// handled by passing the first PDF natively + the rest as extracted text is NOT
-/// done here (see note in deal_generate_version where we route vhs).
+/// which already have everything in `combined_text`). This handles the BYO/local
+/// providers only — the hosted "vhs" provider is routed separately in
+/// `deal_generate_version` via `call_vhs_generate`, which now relays ALL native
+/// PDFs (OPTION B), not just the first.
 async fn dispatch_combined_call(
     client: &reqwest::Client,
     provider: &str,
@@ -4096,25 +4300,94 @@ async fn deal_generate_version(
         .filter_map(|r| r.native_pdf.clone())
         .collect();
 
+    // Hosted relay now sends ALL native PDFs as document blocks (OPTION B), so
+    // their `<source>` slot must NOT also carry the "[attached as a PDF]"
+    // placeholder line — that would double-feed the model (native deck + a
+    // redundant pointer-to-itself for the same source). For the hosted path we
+    // therefore fold only the NON-native-PDF sources (text, URLs, extracted
+    // PDFs) into the text slot; the native decks reach Claude purely as document
+    // blocks. The BYO path keeps using `combined_text` unchanged.
+    let hosted_combined_text = {
+        let text_only: Vec<&ResolvedDealSource> =
+            resolved.iter().filter(|r| r.native_pdf.is_none()).collect();
+        if text_only.is_empty() {
+            String::new()
+        } else {
+            text_only
+                .iter()
+                .map(|r| format!("=== SOURCE: {} ===\n{}", r.label, r.text))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+    };
+
     let client = no_redirect_client(120)?;
     let n_sources = sources.len();
+
+    // 3b. HOSTED ONLY — partition native PDFs by DECODED size and upload the big
+    //     ones out of band. Small PDFs (≤ INLINE_MAX_DECODED ≈ 3MB) stay inline as
+    //     base64 in the body's `pdfs[]`. Bigger ones can't be base64'd through the
+    //     ~4.5MB Vercel body, so we upload the raw bytes via a presigned PUT and
+    //     pass the returned object KEYS as `pdf_refs`. The BYO/local path is
+    //     unchanged — it keeps using the full `pdfs` list directly.
+    let (inline_pdfs, pdf_refs): (Vec<String>, Vec<String>) = if provider == "vhs" {
+        let mut inline_pdfs: Vec<String> = Vec::new();
+        let mut big: Vec<Vec<u8>> = Vec::new();
+        // RUNNING BASE64 BODY BUDGET: keep a PDF inline only while the projected
+        // inline body (Σ base64 sizes + a fixed prompt/envelope reserve) stays
+        // under INLINE_BODY_BUDGET_BYTES. This bounds the inline `pdfs[]` body to
+        // < ~4MB regardless of PDF COUNT — several sub-3MB decks no longer add up
+        // past Vercel's ~4.5MB body limit. A PDF is routed to presign if it's
+        // bigger than INLINE_MAX_DECODED (3MB) OR if adding its base64 size would
+        // push the projection over budget. With a single small PDF the projection
+        // is reserve + one base64 size, well under budget, so behavior is
+        // identical to before.
+        let mut projected_body = INLINE_BODY_RESERVE_BYTES;
+        for p in &pdfs {
+            // Decode to measure the TRUE size and (for big ones) get raw bytes.
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(p.trim())
+                .map_err(|e| format!("Invalid base64 PDF: {}", e))?;
+            let b64_size = base64_len(bytes.len());
+            if bytes.len() <= INLINE_MAX_DECODED
+                && projected_body + b64_size <= INLINE_BODY_BUDGET_BYTES
+            {
+                projected_body += b64_size;
+                inline_pdfs.push(p.clone()); // keep the existing base64 fast path
+            } else {
+                big.push(bytes); // too big OR would overflow body → out-of-band upload
+            }
+        }
+        let pdf_refs = if big.is_empty() {
+            Vec::new()
+        } else {
+            let token = read_vhs_token()?;
+            let base = vhs_base();
+            validate_vhs_base(&base)?;
+            vhs_presign_and_upload(&client, &base, token.as_str(), &big).await?
+        };
+        (inline_pdfs, pdf_refs)
+    } else {
+        // Non-hosted: these vectors are unused (the BYO path reads `pdfs`).
+        (Vec::new(), Vec::new())
+    };
 
     // 4. Generate. memo → one combined call; ic → the multi-section loop, each
     //    section seeing the SAME combined sources, sharing ONE reportId (hosted).
     let report_id = gen_id("rpt"); // shared across hosted sub-calls for metering
     let content: String = if kind == "memo" {
-        let prompt = build_memo_prompt(&combined_text, "", "full-memo", None);
         if provider == "vhs" {
-            // Hosted relay: send the first PDF natively (the server contract takes
-            // ONE pdf); any further PDFs already line through combined_text only as
-            // the placeholder, so for >1 native PDF on hosted we fall back to the
-            // combined text being authoritative. Single-PDF (the common deck case)
-            // is fully native.
+            // Hosted relay (OPTION B): send ALL native PDFs as document blocks —
+            // small ones inline (inline_pdfs), big ones via object-key refs
+            // (pdf_refs). The prompt's text slot carries only the non-native-PDF
+            // sources so we don't double-feed the decks (native block + pointer).
+            let prompt = build_memo_prompt(&hosted_combined_text, "", "full-memo", None);
             let (memo, _quota) =
-                call_vhs_generate("memo", &prompt, 2000, &report_id, pdfs.first().map(|s| s.as_str()))
+                call_vhs_generate("memo", &prompt, 2000, &report_id, &inline_pdfs, &pdf_refs)
                     .await?;
             memo
         } else {
+            let prompt = build_memo_prompt(&combined_text, "", "full-memo", None);
             dispatch_combined_call(&client, &provider, key.as_str(), &prompt, &pdfs).await?
         }
     } else {
@@ -4138,23 +4411,33 @@ async fn deal_generate_version(
             }
             let prior = prior_chunks.join("\n\n");
 
+            // Hosted (OPTION B) sees all native PDFs as document blocks, so its
+            // text slot carries only the non-native-PDF sources to avoid
+            // double-feeding the decks. BYO keeps the full combined_text.
+            let section_source = if provider == "vhs" {
+                hosted_combined_text.as_str()
+            } else {
+                combined_text.as_str()
+            };
             let prompt = ic_section_prompt(
                 section,
                 "full-ic",
                 "",
-                &combined_text,
+                section_source,
                 "",
                 &prior,
                 None,
             )?;
 
             let section_text = if provider == "vhs" {
+                // OPTION B: relay ALL native PDFs — inline (small) + refs (big).
                 let (text, _quota) = call_vhs_generate(
                     "report",
                     &prompt,
                     2000,
                     &report_id,
-                    pdfs.first().map(|s| s.as_str()),
+                    &inline_pdfs,
+                    &pdf_refs,
                 )
                 .await?;
                 text
