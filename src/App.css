@@ -2283,3 +2283,243 @@ a:hover {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ── Deals + version history (W4/W5) ───────────────────────────────── */
+
+/* A danger button for destructive confirms (delete deal / version). */
+.kn-btn--danger {
+  background: rgba(192, 80, 70, 0.14);
+  color: var(--vhs-crimson);
+  border-color: rgba(192, 80, 70, 0.45);
+}
+
+.kn-btn--danger:hover:not(:disabled) {
+  background: var(--vhs-crimson);
+  color: var(--vhs-paper);
+  border-color: var(--vhs-crimson);
+}
+
+/* Header: name + rename/delete. */
+.kn-deal-header {
+  margin-bottom: 6px;
+}
+
+.kn-deal-title {
+  margin-bottom: 6px;
+}
+
+.kn-deal-header-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.kn-deal-rename {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.kn-deal-rename .kn-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Two side-by-side panels (sources | versions); stacks on narrow widths. */
+.kn-deal-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 16px;
+}
+
+@media (max-width: 880px) {
+  .kn-deal-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kn-deal-panel {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.kn-deal-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.kn-deal-panel-title {
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper);
+  margin: 0;
+}
+
+.kn-deal-panel-count {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--vhs-gold);
+  background: var(--vhs-ink-3);
+  border-radius: 10px;
+  padding: 1px 8px;
+  margin-left: 6px;
+}
+
+.kn-deal-panel-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vhs-paper-faint);
+  margin: 0 0 12px;
+}
+
+/* Sources list. */
+.kn-deal-source-list,
+.kn-deal-version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-deal-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.kn-deal-source-emoji {
+  font-size: 14px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.kn-deal-source-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.kn-deal-source-name {
+  font-size: 13px;
+  color: var(--vhs-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-deal-source-meta {
+  font-size: 11px;
+  color: var(--vhs-paper-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-deal-source-del {
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.kn-deal-source-del:hover {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.1);
+}
+
+/* Add-source sub-form. */
+.kn-deal-addsource {
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Versions list. */
+.kn-deal-version {
+  display: flex;
+}
+
+.kn-deal-version-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 9px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.kn-deal-version-main:hover {
+  background: var(--vhs-ink-4);
+  border-color: var(--vhs-ink-4);
+}
+
+.kn-deal-version-seq {
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 20px;
+  letter-spacing: 0.03em;
+  color: var(--vhs-gold);
+  flex-shrink: 0;
+  width: 40px;
+}
+
+.kn-deal-version-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kn-deal-version-note {
+  font-size: 13px;
+  color: var(--vhs-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-deal-version-meta {
+  font-size: 11px;
+  color: var(--vhs-paper-faint);
+}
+
+/* New-version + save-to-deal modals: a bit wider than the usage guide. */
+.kn-deal-newversion,
+.kn-savedeal {
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
-import type { SavedReport } from "./reports/reportStore";
+import type { DealListRow } from "./deals/dealStore";
 import type { Template } from "./templates/types";
 import { isStarter } from "./templates/templateStore";
 
 // Persistent left column (P1 keystone). Three stacked sections:
-//   1. Primary nav  — the flows that were previously only reachable from Home
-//   2. Saved reports — persisted to the Tauri fs; click opens the read-only
-//      viewer, the × deletes the file
-//   3. Templates    — starters (read-only badge) + custom forks
+//   1. Primary nav — the flows that were previously only reachable from Home
+//   2. Deals       — a saved report is now a DEAL that evolves (v1…vN, plus its
+//      accumulated sources); persisted in SQLite. Click opens the deal view.
+//   3. Templates   — starters (read-only badge) + custom forks
 // Styled with the VHS editorial tokens (gold / teal / ink, Cormorant headers,
 // JetBrains-mono eyebrows) to match the rest of the shell.
 
@@ -18,7 +18,8 @@ export type SidebarNav =
   | "icreport"
   | "settings";
 
-function timeAgo(ms: number): string {
+function timeAgo(iso: string): string {
+  const ms = Date.parse(iso);
   if (!ms) return "";
   const diff = Date.now() - ms;
   const mins = Math.floor(diff / 60000);
@@ -41,22 +42,20 @@ const NAV_ITEMS: { id: SidebarNav; label: string; emoji: string }[] = [
 
 export function Sidebar({
   activeNav,
-  selectedReportId,
-  reports,
+  selectedDealId,
+  deals,
   templates,
   onNavigate,
-  onOpenReport,
-  onDeleteReport,
+  onOpenDeal,
   onGenerateTemplate,
   usageSlot,
 }: {
   activeNav: SidebarNav | null;
-  selectedReportId: string | null;
-  reports: SavedReport[];
+  selectedDealId: string | null;
+  deals: DealListRow[];
   templates: Template[];
   onNavigate: (nav: SidebarNav) => void;
-  onOpenReport: (id: string) => void;
-  onDeleteReport: (id: string) => void;
+  onOpenDeal: (id: string) => void;
   onGenerateTemplate: (id: string) => void;
   // W5: hosted usage gauge (compact). Rendered by App so the gauge logic stays
   // in one place; null when VHS isn't linked.
@@ -73,7 +72,7 @@ export function Sidebar({
           <button
             key={`${item.id}-${i}`}
             className={`kn-sidebar-link ${
-              activeNav === item.id && selectedReportId === null
+              activeNav === item.id && selectedDealId === null
                 ? "kn-sidebar-link--active"
                 : ""
             }`}
@@ -87,40 +86,37 @@ export function Sidebar({
 
       <div className="kn-sidebar-section">
         <div className="kn-sidebar-heading">
-          Saved reports
-          <span className="kn-sidebar-count">{reports.length}</span>
+          Deals
+          <span className="kn-sidebar-count">{deals.length}</span>
         </div>
-        {reports.length === 0 ? (
+        {deals.length === 0 ? (
           <p className="kn-sidebar-empty">
-            Nothing saved yet. Generate a report and hit “Save report”.
+            No deals yet. Generate a report and hit “Save to deal”.
           </p>
         ) : (
           <ul className="kn-sidebar-list">
-            {reports.map((r) => (
+            {deals.map((d) => (
               <li
-                key={r.id}
+                key={d.deal.id}
                 className={`kn-sidebar-report ${
-                  selectedReportId === r.id ? "kn-sidebar-report--active" : ""
+                  selectedDealId === d.deal.id ? "kn-sidebar-report--active" : ""
                 }`}
               >
                 <button
                   className="kn-sidebar-report-main"
-                  onClick={() => onOpenReport(r.id)}
-                  title={r.title}
+                  onClick={() => onOpenDeal(d.deal.id)}
+                  title={d.deal.name}
                 >
-                  <span className="kn-sidebar-report-title">{r.title || "Untitled"}</span>
-                  <span className="kn-sidebar-report-meta">
-                    {r.templateName || "report"}
-                    {r.createdAt ? ` · ${timeAgo(r.createdAt)}` : ""}
+                  <span className="kn-sidebar-report-title">
+                    {d.deal.name || "Untitled deal"}
                   </span>
-                </button>
-                <button
-                  className="kn-sidebar-report-del"
-                  onClick={() => onDeleteReport(r.id)}
-                  title="Delete report"
-                  aria-label="Delete report"
-                >
-                  ×
+                  <span className="kn-sidebar-report-meta">
+                    {d.latest_seq > 0 ? `v${d.latest_seq}` : "no versions"}
+                    {d.source_count > 0
+                      ? ` · ${d.source_count} source${d.source_count === 1 ? "" : "s"}`
+                      : ""}
+                    {d.updated_at ? ` · ${timeAgo(d.updated_at)}` : ""}
+                  </span>
                 </button>
               </li>
             ))}

@@ -16,15 +16,11 @@ import {
 } from "./templates/templateStore";
 import { type Template, MAX_TEMPLATE_BLOCKS } from "./templates/types";
 import { Sidebar, type SidebarNav } from "./Sidebar";
-import {
-  listReports,
-  getReport,
-  saveReport,
-  deleteReport,
-  newReportId,
-  type SavedReport,
-} from "./reports/reportStore";
+import type { SavedReport } from "./reports/reportStore";
 import { exportReportToPdf, exportReportToDocx } from "./reports/exportReport";
+import { listDeals, type DealListRow } from "./deals/dealStore";
+import { DealView } from "./deals/DealView";
+import { SaveToDealModal, type RunSource } from "./deals/SaveToDeal";
 import "./App.css";
 
 /**
@@ -63,6 +59,17 @@ function MarkdownView({ source }: { source: string }) {
 
 // ─── Types ────────────────────────────────────────────────────────────
 
+// A one-shot flow's request to fold its result into a deal. Carries the
+// generated markdown + enough to attach the run's source + tag the version.
+type SaveToDealRequest = {
+  result: string;
+  kind: "memo" | "ic";
+  provider: string;
+  templateId: string;
+  source: RunSource | null;
+  suggestedName: string;
+};
+
 type View =
   | "home"
   | "settings"
@@ -70,7 +77,7 @@ type View =
   | "icreport"
   | "template-editor"
   | "templates"
-  | "report";
+  | "deal";
 // "vhs" = VHS-hosted (W4): the desktop relays the built prompt through the
 // VHS server proxy using a device bearer token; no user API key needed.
 type Provider = "anthropic" | "openai" | "nvidia" | "gemini" | "local" | "vhs";
@@ -196,6 +203,38 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+// Build a RunSource (for "Save to deal") from a flow's source inputs. For a PDF
+// this reads the file to base64 so it can be persisted as a deal source; url and
+// text pass through. Returns null if nothing usable is present.
+async function buildRunSource(
+  mode: SourceMode,
+  url: string,
+  text: string,
+  pdfFile: File | null,
+): Promise<RunSource | null> {
+  if (mode === "url" && url.trim()) {
+    return { kind: "url", name: url.trim(), content: url.trim() };
+  }
+  if (mode === "text" && text.trim()) {
+    return { kind: "text", name: "Pasted text", content: text.trim() };
+  }
+  if (mode === "pdf" && pdfFile) {
+    const b64 = await fileToBase64(pdfFile);
+    return { kind: "pdf", name: pdfFile.name, content: b64 };
+  }
+  return null;
+}
+
+// Derive a deal name from the first markdown heading, else a dated fallback.
+function deriveDealName(md: string, fallback: string): string {
+  const heading = md
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => /^#{1,3}\s+\S/.test(l));
+  if (heading) return heading.replace(/^#{1,3}\s+/, "").slice(0, 80);
+  return `${fallback} · ${new Date().toLocaleDateString()}`;
+}
+
 // W4/W5: the hosted /generate usage tail. Carries BOTH the old prod quota
 // shape (used/limit/overage) and the new per-report-metering shape
 // (reports_this_month/usage_fraction) — the Rust side normalises whichever the
@@ -286,24 +325,33 @@ function App() {
   // When linked, "vhs" is merged into the available providers below.
   const [vhsLinked, setVhsLinked] = useState(false);
 
-  // P1: saved reports + templates lifted to the App root so the persistent
-  // sidebar reflects them everywhere, mirroring the existing refreshProviders
-  // pattern. Reports live on the Tauri fs; templates still come from
-  // templateStore (localStorage — Phase D migration deferred).
-  const [reports, setReports] = useState<SavedReport[]>([]);
+  // Deals + templates lifted to the App root so the persistent sidebar reflects
+  // them everywhere, mirroring the existing refreshProviders pattern. Deals live
+  // in SQLite (W4/W5); templates still come from templateStore (localStorage).
+  // Legacy flat reports were migrated to deals by the Rust layer, so they show
+  // up in this list automatically on first load.
+  const [deals, setDeals] = useState<DealListRow[]>([]);
   const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
-  // The saved report currently open in the read-only viewer.
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  // The deal currently open in the deal view.
+  const [selectedDealId, setSelectedDealId] = useState<string | null>(null);
   // W5 hosted usage gauge. null until first successful fetch (or while unlinked
   // / fetch failed) — the gauge hides whenever this is null.
   const [usage, setUsage] = useState<HostedUsage | null>(null);
   // Template the gallery should jump straight to "generate" on (set when the
   // sidebar Templates list is clicked). null = land on browse.
   const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null);
+  // "Save to deal" request raised by a one-shot flow (Quick Memo / IC / template
+  // run). null = modal closed. App owns the modal so every flow opens the same
+  // one and the deal list refreshes in one place.
+  const [saveToDeal, setSaveToDeal] = useState<SaveToDealRequest | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  const openSaveToDeal = useCallback((req: SaveToDealRequest) => {
+    setSaveToDeal(req);
   }, []);
 
   const refreshProviders = useCallback(async () => {
@@ -324,12 +372,12 @@ function App() {
     }
   }, []);
 
-  const refreshReports = useCallback(async () => {
+  const refreshDeals = useCallback(async () => {
     try {
-      setReports(await listReports());
+      setDeals(await listDeals());
     } catch (e) {
-      console.error("list_reports failed", e);
-      setReports([]);
+      console.error("deal_list failed", e);
+      setDeals([]);
     }
   }, []);
 
@@ -355,8 +403,8 @@ function App() {
 
   useEffect(() => {
     refreshProviders();
-    refreshReports();
-  }, [refreshProviders, refreshReports]);
+    refreshDeals();
+  }, [refreshProviders, refreshDeals]);
 
   // Try to load the usage gauge on mount and whenever link state changes.
   // vhs_usage itself decides: if a token is present it returns data (gauge
@@ -368,46 +416,44 @@ function App() {
   }, [vhsLinked, refreshUsage]);
 
   const goHome = useCallback(() => {
-    setSelectedReportId(null);
+    setSelectedDealId(null);
     setView("home");
   }, []);
 
   const handleNavigate = useCallback(
     (nav: SidebarNav) => {
-      setSelectedReportId(null);
+      setSelectedDealId(null);
       setPendingTemplateId(null);
       setView(nav);
     },
     [],
   );
 
-  const handleOpenReport = useCallback((id: string) => {
-    setSelectedReportId(id);
-    setView("report");
+  const handleOpenDeal = useCallback((id: string) => {
+    setSelectedDealId(id);
+    setView("deal");
   }, []);
 
-  const handleDeleteReport = useCallback(
-    async (id: string) => {
-      try {
-        await deleteReport(id);
-        await refreshReports();
-        if (selectedReportId === id) {
-          setSelectedReportId(null);
-          setView("home");
-        }
-        showToast("Report deleted");
-      } catch (e) {
-        showToast(`Delete failed: ${String(e)}`);
-      }
-    },
-    [refreshReports, selectedReportId, showToast],
-  );
+  // A deal was deleted from inside the deal view — drop back to home + refresh.
+  const handleDealDeleted = useCallback(async () => {
+    setSelectedDealId(null);
+    setView("home");
+    await refreshDeals();
+    showToast("Deal deleted");
+  }, [refreshDeals, showToast]);
 
   const handleGenerateTemplate = useCallback((id: string) => {
-    setSelectedReportId(null);
+    setSelectedDealId(null);
     setPendingTemplateId(id);
     setView("templates");
   }, []);
+
+  // Custom + starter templates, reduced to {id,name} for the deal pickers (New
+  // version + Save-to-deal template select).
+  const templateOptions = useMemo(
+    () => templates.map((t) => ({ id: t.id, name: t.name })),
+    [templates],
+  );
 
   // The full set of providers a flow can run with: BYO keys + Local (from the
   // Keychain scan) plus VHS-hosted when the device is linked. This is what the
@@ -459,12 +505,11 @@ function App() {
       <div className="kn-body">
         <Sidebar
           activeNav={activeNav}
-          selectedReportId={selectedReportId}
-          reports={reports}
+          selectedDealId={selectedDealId}
+          deals={deals}
           templates={templates}
           onNavigate={handleNavigate}
-          onOpenReport={handleOpenReport}
-          onDeleteReport={handleDeleteReport}
+          onOpenDeal={handleOpenDeal}
           onGenerateTemplate={handleGenerateTemplate}
           usageSlot={usage ? <UsageGauge usage={usage} variant="compact" /> : null}
         />
@@ -502,6 +547,7 @@ function App() {
               configuredProviders={availableProviders}
               showToast={showToast}
               onUsageChange={refreshUsage}
+              onSaveToDeal={openSaveToDeal}
             />
           )}
           {view === "icreport" && (
@@ -510,6 +556,7 @@ function App() {
               configuredProviders={availableProviders}
               showToast={showToast}
               onUsageChange={refreshUsage}
+              onSaveToDeal={openSaveToDeal}
             />
           )}
           {view === "template-editor" && (
@@ -523,21 +570,42 @@ function App() {
               initialTemplateId={pendingTemplateId}
               clearInitialTemplate={() => setPendingTemplateId(null)}
               refreshTemplates={refreshTemplates}
-              refreshReports={refreshReports}
-              onSavedReport={handleOpenReport}
               onUsageChange={refreshUsage}
+              onSaveToDeal={openSaveToDeal}
             />
           )}
-          {view === "report" && (
-            <ReportViewer
-              reportId={selectedReportId}
-              onBack={goHome}
-              onDelete={handleDeleteReport}
+          {view === "deal" && selectedDealId && (
+            <DealView
+              dealId={selectedDealId}
+              availableProviders={availableProviders}
+              templateOptions={templateOptions}
+              MarkdownView={MarkdownView}
               showToast={showToast}
+              onBack={goHome}
+              onDeleted={handleDealDeleted}
+              onChanged={refreshDeals}
             />
           )}
         </main>
       </div>
+
+      {saveToDeal && (
+        <SaveToDealModal
+          result={saveToDeal.result}
+          kind={saveToDeal.kind}
+          provider={saveToDeal.provider}
+          templateId={saveToDeal.templateId}
+          source={saveToDeal.source}
+          suggestedName={saveToDeal.suggestedName}
+          showToast={showToast}
+          onClose={() => setSaveToDeal(null)}
+          onSaved={async (dealId) => {
+            setSaveToDeal(null);
+            await refreshDeals();
+            handleOpenDeal(dealId);
+          }}
+        />
+      )}
 
       <footer className="kn-footer">
         <span className="kn-footer-text">
@@ -1594,12 +1662,15 @@ function QuickMemo({
   configuredProviders,
   showToast,
   onUsageChange,
+  onSaveToDeal,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
   showToast: (m: string) => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
   onUsageChange?: () => void;
+  // Fold the finished memo into a deal (new or existing).
+  onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
@@ -1677,6 +1748,19 @@ function QuickMemo({
     showToast("Memo copied");
   };
 
+  const handleSaveToDeal = async () => {
+    if (!memo || !onSaveToDeal) return;
+    const source = await buildRunSource(mode, url, text, pdfFile);
+    onSaveToDeal({
+      result: memo,
+      kind: "memo",
+      provider,
+      templateId: "",
+      source,
+      suggestedName: deriveDealName(memo, "Memo"),
+    });
+  };
+
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
@@ -1746,9 +1830,16 @@ function QuickMemo({
           {running ? "Drafting…" : "Draft memo"}
         </button>
         {memo && (
-          <button className="kn-btn" onClick={handleCopy}>
-            Copy memo
-          </button>
+          <>
+            {onSaveToDeal && (
+              <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
+                Save to deal
+              </button>
+            )}
+            <button className="kn-btn" onClick={handleCopy}>
+              Copy memo
+            </button>
+          </>
         )}
       </div>
 
@@ -1787,12 +1878,15 @@ function IcReport({
   configuredProviders,
   showToast,
   onUsageChange,
+  onSaveToDeal,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
   showToast: (m: string) => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
   onUsageChange?: () => void;
+  // Fold the compiled IC memo into a deal (new or existing).
+  onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
@@ -1909,6 +2003,20 @@ function IcReport({
     if (!sections.compile) return;
     navigator.clipboard.writeText(sections.compile);
     showToast("Memo copied");
+  };
+
+  const handleSaveToDeal = async () => {
+    const compiled = sections.compile;
+    if (!compiled || !onSaveToDeal) return;
+    const source = await buildRunSource(mode, url, text, pdfFile);
+    onSaveToDeal({
+      result: compiled,
+      kind: "ic",
+      provider,
+      templateId: "",
+      source,
+      suggestedName: deriveDealName(compiled, "IC report"),
+    });
   };
 
   return (
@@ -2036,9 +2144,16 @@ function IcReport({
             {running === activeSection ? "Drafting…" : sections[activeSection] ? "Re-draft" : "Draft section"}
           </button>
           {activeSection === "compile" && sections.compile && (
-            <button className="kn-btn" onClick={handleCopyCompile}>
-              Copy memo
-            </button>
+            <>
+              {onSaveToDeal && (
+                <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
+                  Save to deal
+                </button>
+              )}
+              <button className="kn-btn" onClick={handleCopyCompile}>
+                Copy memo
+              </button>
+            </>
           )}
         </div>
 
@@ -2344,9 +2459,8 @@ function TemplateGallery({
   initialTemplateId,
   clearInitialTemplate,
   refreshTemplates,
-  refreshReports,
-  onSavedReport,
   onUsageChange,
+  onSaveToDeal,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
@@ -2355,12 +2469,12 @@ function TemplateGallery({
   // the generate flow for that template id. Cleared once consumed.
   initialTemplateId?: string | null;
   clearInitialTemplate?: () => void;
-  // Keep the App-root template + report lists (and the sidebar) in sync.
+  // Keep the App-root template list (and the sidebar) in sync.
   refreshTemplates?: () => void;
-  refreshReports?: () => Promise<void>;
-  onSavedReport?: (id: string) => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
   onUsageChange?: () => void;
+  // Fold a finished template run into a deal.
+  onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
   const [mode, setMode] = useState<"browse" | "edit" | "generate">("browse");
   const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
@@ -2411,9 +2525,8 @@ function TemplateGallery({
         configuredProviders={configuredProviders}
         showToast={showToast}
         onClose={() => setMode("browse")}
-        refreshReports={refreshReports}
-        onSavedReport={onSavedReport}
         onUsageChange={onUsageChange}
+        onSaveToDeal={onSaveToDeal}
       />
     );
   }
@@ -2498,20 +2611,17 @@ function GenerateFromTemplate({
   configuredProviders,
   showToast,
   onClose,
-  refreshReports,
-  onSavedReport,
   onUsageChange,
+  onSaveToDeal,
 }: {
   template: Template;
   configuredProviders: Provider[];
   showToast: (m: string) => void;
   onClose: () => void;
-  // P1: after a save, refresh the App-root report list (sidebar) and
-  // optionally open the freshly-saved report in the read-only viewer.
-  refreshReports?: () => Promise<void>;
-  onSavedReport?: (id: string) => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
   onUsageChange?: () => void;
+  // Fold the finished template report into a deal (new or existing).
+  onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
   const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
   const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
@@ -2525,9 +2635,6 @@ function GenerateFromTemplate({
   const [results, setResults] = useState<Record<string, string>>({});
   const [compiled, setCompiled] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // P1 save state: idle → saving → saved. Resets to idle on every fresh run
-  // so a re-generate offers a fresh save.
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [exporting, setExporting] = useState<null | "pdf" | "docx">(null);
 
   const genBlocks = template.blocks.filter((b) => b.content.mode === "generated");
@@ -2564,7 +2671,6 @@ function GenerateFromTemplate({
     setErr(null);
     setResults({});
     setCompiled(null);
-    setSaveState("idle");
     // Guard the block cap at generation time too (belt + suspenders with the
     // designer's add-block disable). A template that somehow exceeds the cap is
     // refused rather than burning N hosted calls.
@@ -2664,29 +2770,20 @@ function GenerateFromTemplate({
     return `${template.name} · ${new Date().toLocaleDateString()}`;
   };
 
-  const handleSave = async () => {
-    if (!compiled) return;
-    setSaveState("saving");
-    try {
-      const id = newReportId();
-      await saveReport({
-        id,
-        title: deriveTitle(compiled),
-        templateId: template.id,
-        templateName: template.name,
-        provider,
-        createdAt: Date.now(),
-        markdown: compiled,
-        blocks: results,
-      });
-      await refreshReports?.();
-      setSaveState("saved");
-      showToast("Report saved");
-      onSavedReport?.(id);
-    } catch (e) {
-      setSaveState("idle");
-      showToast(`Save failed: ${String(e)}`);
-    }
+  // Fold the finished template report into a deal. A template report has no
+  // single "memo|ic" kind, so we tag it as a memo (it's a one-shot compiled doc)
+  // and carry the template id so the version remembers which template made it.
+  const handleSaveToDeal = async () => {
+    if (!compiled || !onSaveToDeal) return;
+    const source = await buildRunSource(mode, url, text, pdfFile);
+    onSaveToDeal({
+      result: compiled,
+      kind: "memo",
+      provider,
+      templateId: template.id,
+      source,
+      suggestedName: deriveTitle(compiled),
+    });
   };
 
   // Export the just-generated result without requiring a Save first — build an
@@ -2781,17 +2878,11 @@ function GenerateFromTemplate({
         </button>
         {compiled && (
           <>
-            <button
-              className="kn-btn"
-              onClick={handleSave}
-              disabled={saveState === "saving"}
-            >
-              {saveState === "saving"
-                ? "Saving…"
-                : saveState === "saved"
-                  ? "✓ Saved"
-                  : "Save report"}
-            </button>
+            {onSaveToDeal && (
+              <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
+                Save to deal
+              </button>
+            )}
             <button className="kn-btn" onClick={handleCopy}>
               Copy report
             </button>
@@ -2842,146 +2933,6 @@ function GenerateFromTemplate({
             <MarkdownView source={compiled} />
           </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Read-only report viewer (P1 keystone) ────────────────────────────
-//
-// Loads a saved report from the Tauri fs by id and renders its compiled
-// markdown read-only, reusing MarkdownView + the firm-logo render path from
-// GenerateFromTemplate. This is what makes saved reports a durable workspace
-// artefact rather than transient component state.
-
-function ReportViewer({
-  reportId,
-  onBack,
-  onDelete,
-  showToast,
-}: {
-  reportId: string | null;
-  onBack: () => void;
-  onDelete: (id: string) => void;
-  showToast: (m: string) => void;
-}) {
-  const [report, setReport] = useState<SavedReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [exporting, setExporting] = useState<null | "pdf" | "docx">(null);
-  const firmLogo = getFirmLogo();
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!reportId) {
-      setReport(null);
-      setLoading(false);
-      setNotFound(true);
-      return;
-    }
-    setLoading(true);
-    setNotFound(false);
-    getReport(reportId)
-      .then((r) => {
-        if (cancelled) return;
-        if (r) setReport(r);
-        else setNotFound(true);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setNotFound(true);
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reportId]);
-
-  const handleCopy = () => {
-    if (!report) return;
-    navigator.clipboard.writeText(report.markdown);
-    showToast("Report copied");
-  };
-
-  const handleExportPdf = async () => {
-    if (!report || exporting) return;
-    setExporting("pdf");
-    try {
-      const ok = await exportReportToPdf(report);
-      if (ok) showToast("Opening print dialog — choose “Save as PDF”");
-    } catch {
-      showToast("PDF export failed");
-    } finally {
-      setExporting(null);
-    }
-  };
-
-  const handleExportDocx = async () => {
-    if (!report || exporting) return;
-    setExporting("docx");
-    try {
-      const saved = await exportReportToDocx(report);
-      if (saved) showToast("Word document saved");
-    } catch {
-      showToast("DOCX export failed");
-    } finally {
-      setExporting(null);
-    }
-  };
-
-  return (
-    <div className="kn-flow">
-      <button className="kn-back" onClick={onBack}>
-        ← Back
-      </button>
-
-      {loading && <p className="kn-flow-sub">Loading report…</p>}
-
-      {!loading && notFound && (
-        <div className="kn-form-feedback kn-form-feedback--err">
-          ✗ This report could not be found — it may have been deleted.
-        </div>
-      )}
-
-      {!loading && report && (
-        <>
-          <h2 className="kn-flow-title">{report.title}</h2>
-          <p className="kn-flow-sub">
-            {report.templateName || "report"}
-            {report.provider ? ` · ${PROVIDER_LABELS[report.provider as Provider] ?? report.provider}` : ""}
-            {report.createdAt ? ` · ${new Date(report.createdAt).toLocaleString()}` : ""}
-          </p>
-
-          <div className="kn-form-actions" style={{ marginBottom: 8 }}>
-            <button className="kn-btn" onClick={handleCopy}>
-              Copy report
-            </button>
-            <button className="kn-btn" onClick={handleExportPdf} disabled={!!exporting}>
-              {exporting === "pdf" ? "Exporting…" : "Export PDF"}
-            </button>
-            <button className="kn-btn" onClick={handleExportDocx} disabled={!!exporting}>
-              {exporting === "docx" ? "Exporting…" : "Export DOCX"}
-            </button>
-            <button className="kn-btn" onClick={() => onDelete(report.id)}>
-              Delete
-            </button>
-          </div>
-
-          <div className="kn-result" style={{ borderTop: "none", paddingTop: 0 }}>
-            <div className="kn-markdown">
-              {firmLogo && (
-                <img
-                  src={firmLogo.dataUrl}
-                  alt=""
-                  className="kn-tpl-logo-img"
-                  style={{ marginBottom: 16 }}
-                />
-              )}
-              <MarkdownView source={report.markdown} />
-            </div>
-          </div>
-        </>
       )}
     </div>
   );

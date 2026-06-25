@@ -19,7 +19,7 @@ const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai", "gemini", "nvidia"
 // Bearer auth) so we reuse the OpenAI request/response structs and only swap
 // the base URL + model. Pull the model out as a const so it's a one-line swap.
 const NVIDIA_BASE_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
-const NVIDIA_MODEL: &str = "nvidia/llama-3.1-nemotron-70b-instruct";
+const NVIDIA_MODEL: &str = "nvidia/llama-3.3-nemotron-super-49b-v1";
 
 // ─── SSRF defence (4 layers) ─────────────────────────────────────────
 //
@@ -2946,6 +2946,1282 @@ fn save_export_file(path: String, base64_data: String) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Deals + version history (W4/W5 — SQLite) ────────────────────────
+//
+// A saved report becomes a DEAL that EVOLVES over time. v1 is generated from
+// the deck; the user then attaches a data room and generates v2; supplements
+// land and v3 is generated — each version a FULL re-generate from ALL the
+// deal's accumulated sources (not a delta). The deal keeps every version so the
+// VC can diff "what we knew at v1" vs "after the data room".
+//
+// Storage: rusqlite (bundled SQLite, no system dep) at {app_data_dir}/kneecap.db
+// — same app_data_dir the saved-report JSON store uses. We open a fresh
+// Connection per command (cheap for a local single-user desktop app) rather than
+// threading a Mutex<Connection> through Tauri state; FOREIGN KEYS is a per-
+// connection PRAGMA so every helper turns it on right after open.
+//
+// Schema (3 tables, all CREATE TABLE IF NOT EXISTS on first open):
+//   deal(id, name, status, created_at, updated_at)
+//   source(id, deal_id→deal CASCADE, kind, name, content, added_at)
+//   version(id, deal_id→deal CASCADE, seq, kind, template_id, provider,
+//           content, note, source_ids /*JSON array*/, created_at)
+//
+// The generation path reuses the Phase-1 native-PDF architecture verbatim
+// (resolve_source / provider_supports_native_pdf / build_memo_prompt /
+// ic_section_prompt / the call_*_memo helpers) — the ONLY change is the SOURCE
+// slot now carries MULTIPLE labelled sources (and multiple PDF document blocks
+// for native providers) instead of one.
+
+/// ISO-8601-ish UTC timestamp (seconds) for created_at / updated_at / added_at.
+/// We avoid pulling in `chrono`: SQLite stores these as TEXT and the frontend
+/// only needs a sortable, displayable string. Format: "2026-06-25T13:45:09Z".
+fn now_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Civil-date conversion (days since 1970) via Howard Hinnant's algorithm —
+    // zero-dependency, correct across leap years, good enough for a UI label.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hh, mm, ss
+    )
+}
+
+/// A random-ish id with a typed prefix (e.g. "deal", "src", "ver"). Reuses the
+/// same hash-of-entropy approach as gen_client_secret — no CSPRNG crate, and
+/// these ids only need to be unique on one local machine, not unguessable.
+fn gen_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let stack_anchor = 0u8;
+    let seed = format!(
+        "{:?}-{}-{}-{:p}",
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(),
+        std::process::id(),
+        n,
+        &stack_anchor as *const u8
+    );
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in seed.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{}-{:016x}{:08x}", prefix, h, n as u32)
+}
+
+// ── Row shapes returned to the frontend ─────────────────────────────
+
+#[derive(Serialize, Clone)]
+pub struct Deal {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DealSource {
+    pub id: String,
+    pub deal_id: String,
+    pub kind: String,
+    pub name: String,
+    pub content: String,
+    pub added_at: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DealVersion {
+    pub id: String,
+    pub deal_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub template_id: String,
+    pub provider: String,
+    pub content: String,
+    pub note: String,
+    /// JSON array string of the source ids this version was generated from.
+    pub source_ids: String,
+    pub created_at: String,
+}
+
+/// One row in the deal LIST UI — the deal plus rolled-up counts so the sidebar
+/// shows "3 versions · 5 sources" without a second round-trip per deal.
+#[derive(Serialize)]
+pub struct DealListRow {
+    pub deal: Deal,
+    pub latest_seq: i64,
+    pub version_count: i64,
+    pub source_count: i64,
+    pub updated_at: String,
+}
+
+/// What deal_get returns: the deal, its versions (newest seq first), its sources.
+#[derive(Serialize)]
+pub struct DealDetail {
+    pub deal: Deal,
+    pub versions: Vec<DealVersion>,
+    pub sources: Vec<DealSource>,
+}
+
+// ── Connection + schema ─────────────────────────────────────────────
+
+/// Path to `{app_data_dir}/kneecap.db`, creating the parent dir on first use —
+/// same app_data_dir the saved-report JSON store + configured.json marker use.
+fn db_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Cannot resolve app data dir: {}", e))?;
+    std::fs::create_dir_all(&base)
+        .map_err(|e| format!("Cannot create app data dir: {}", e))?;
+    Ok(base.join("kneecap.db"))
+}
+
+/// Open the DB, enable foreign keys (per-connection PRAGMA), ensure the schema,
+/// and run the one-time legacy-report migration. Open-per-command: cheap for a
+/// local single-user app and avoids threading a Mutex<Connection> through state.
+fn open_db(app: &tauri::AppHandle) -> Result<rusqlite::Connection, String> {
+    let path = db_path(app)?;
+    let conn = rusqlite::Connection::open(&path)
+        .map_err(|e| format!("Cannot open DB: {}", e))?;
+    // FOREIGN KEYS is OFF by default in SQLite and is per-connection — turn it
+    // on so the source/version → deal ON DELETE CASCADE actually fires.
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| format!("Cannot enable foreign_keys: {}", e))?;
+    init_schema(&conn)?;
+    run_legacy_migration(app, &conn)?;
+    Ok(conn)
+}
+
+/// Create the 3 tables + a tiny meta table (used to flag the migration done).
+/// All IF NOT EXISTS so this is idempotent on every open.
+fn init_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS deal (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'active',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS source (
+            id        TEXT PRIMARY KEY,
+            deal_id   TEXT NOT NULL REFERENCES deal(id) ON DELETE CASCADE,
+            kind      TEXT NOT NULL,
+            name      TEXT NOT NULL,
+            content   TEXT NOT NULL,
+            added_at  TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS version (
+            id          TEXT PRIMARY KEY,
+            deal_id     TEXT NOT NULL REFERENCES deal(id) ON DELETE CASCADE,
+            seq         INTEGER NOT NULL,
+            kind        TEXT NOT NULL,
+            template_id TEXT NOT NULL DEFAULT '',
+            provider    TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL,
+            note        TEXT NOT NULL DEFAULT '',
+            source_ids  TEXT NOT NULL DEFAULT '[]',
+            created_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_source_deal  ON source(deal_id);
+        CREATE INDEX IF NOT EXISTS idx_version_deal ON version(deal_id);
+        CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )
+    .map_err(|e| format!("Schema init failed: {}", e))
+}
+
+// ── One-time migration of the legacy flat report store ──────────────
+//
+// Before deals existed, generated reports were saved as flat JSON files under
+// {app_data_dir}/reports/<id>.json (SavedReport in src/reports/reportStore.ts).
+// On the FIRST open where the deal table is empty AND we haven't migrated yet,
+// import each old report as a deal (name = report title) with a single v1
+// version (kind from the report, content = its markdown). We DON'T delete the
+// old files — they remain as a fallback — and we set a meta flag so this runs
+// exactly once.
+
+const MIGRATION_FLAG_KEY: &str = "legacy_reports_migrated";
+
+/// The subset of SavedReport (reportStore.ts) we need for migration. Extra
+/// fields are ignored; serde tolerates them. `title`/`markdown` are the must-
+/// haves — a file missing either is skipped.
+#[derive(Deserialize)]
+struct LegacyReport {
+    title: Option<String>,
+    #[serde(rename = "templateId")]
+    template_id: Option<String>,
+    provider: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<i64>,
+    markdown: Option<String>,
+    /// "memo" | "ic" lives on the template kind; older files may not carry it,
+    /// so we default to "memo" when absent.
+    kind: Option<String>,
+}
+
+/// Run the legacy import once. Guard conditions (ALL must hold):
+///   - the migration flag is not yet set in `meta`, AND
+///   - the `deal` table is currently empty.
+/// Either guard alone makes this a no-op, so a user who already has deals never
+/// gets a surprise re-import even if the flag row is somehow missing.
+fn run_legacy_migration(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+) -> Result<(), String> {
+    // Already migrated?
+    let migrated: bool = conn
+        .query_row(
+            "SELECT 1 FROM meta WHERE key = ?1",
+            [MIGRATION_FLAG_KEY],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if migrated {
+        return Ok(());
+    }
+
+    // Only import into an EMPTY deal table.
+    let deal_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM deal", [], |r| r.get(0))
+        .map_err(|e| format!("Count deals failed: {}", e))?;
+    if deal_count > 0 {
+        // Deals already exist — mark migrated so we never re-scan, and stop.
+        set_migration_done(conn)?;
+        return Ok(());
+    }
+
+    // Resolve the legacy reports dir WITHOUT creating it; if it doesn't exist
+    // there's nothing to import.
+    let base = match app.path().app_data_dir() {
+        Ok(b) => b,
+        Err(_) => {
+            set_migration_done(conn)?;
+            return Ok(());
+        }
+    };
+    let reports = base.join("reports");
+    let entries = match std::fs::read_dir(&reports) {
+        Ok(e) => e,
+        Err(_) => {
+            // No reports dir → nothing to migrate. Flag done so we skip next time.
+            set_migration_done(conn)?;
+            return Ok(());
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue, // unreadable → skip, don't sink the batch
+        };
+        let rep: LegacyReport = match serde_json::from_str(&raw) {
+            Ok(r) => r,
+            Err(_) => continue, // corrupt / hand-edited → skip
+        };
+        let markdown = match rep.markdown.filter(|m| !m.trim().is_empty()) {
+            Some(m) => m,
+            None => continue, // no body → nothing worth importing
+        };
+        let title = rep
+            .title
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| "Untitled deal".to_string());
+        // SavedReport.createdAt is epoch MS; convert to our ISO string if present,
+        // else stamp now. We keep the deal + its v1 on the same timestamp.
+        let ts = rep
+            .created_at
+            .filter(|ms| *ms > 0)
+            .map(epoch_ms_to_iso8601)
+            .unwrap_or_else(now_iso8601);
+        let kind = match rep.kind.as_deref() {
+            Some("ic") => "ic",
+            _ => "memo",
+        };
+        let template_id = rep.template_id.unwrap_or_default();
+        let provider = rep.provider.unwrap_or_default();
+
+        // Insert the deal + its single v1 (no sources — the old store didn't keep
+        // them). A single failed row shouldn't abort the whole migration, so we
+        // log + continue rather than `?`.
+        let deal_id = gen_id("deal");
+        if conn
+            .execute(
+                "INSERT INTO deal (id, name, status, created_at, updated_at)
+                 VALUES (?1, ?2, 'active', ?3, ?3)",
+                rusqlite::params![deal_id, title, ts],
+            )
+            .is_err()
+        {
+            continue;
+        }
+        let ver_id = gen_id("ver");
+        let _ = conn.execute(
+            "INSERT INTO version
+                (id, deal_id, seq, kind, template_id, provider, content, note, source_ids, created_at)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, '[]', ?8)",
+            rusqlite::params![
+                ver_id,
+                deal_id,
+                kind,
+                template_id,
+                provider,
+                markdown,
+                "imported from saved report",
+                ts
+            ],
+        );
+    }
+
+    set_migration_done(conn)?;
+    Ok(())
+}
+
+/// Convert epoch milliseconds (SavedReport.createdAt) to our ISO-8601 string.
+fn epoch_ms_to_iso8601(ms: i64) -> String {
+    let secs = (ms / 1000).max(0) as u64;
+    // Reuse now_iso8601's civil-date math by shimming SystemTime would be
+    // awkward; instead inline the same conversion on the given secs.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hh, mm, ss)
+}
+
+fn set_migration_done(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, '1')",
+        [MIGRATION_FLAG_KEY],
+    )
+    .map_err(|e| format!("Cannot set migration flag: {}", e))?;
+    Ok(())
+}
+
+// ── Row mappers ─────────────────────────────────────────────────────
+
+fn map_deal(row: &rusqlite::Row) -> rusqlite::Result<Deal> {
+    Ok(Deal {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        status: row.get("status")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn map_source(row: &rusqlite::Row) -> rusqlite::Result<DealSource> {
+    Ok(DealSource {
+        id: row.get("id")?,
+        deal_id: row.get("deal_id")?,
+        kind: row.get("kind")?,
+        name: row.get("name")?,
+        content: row.get("content")?,
+        added_at: row.get("added_at")?,
+    })
+}
+
+fn map_version(row: &rusqlite::Row) -> rusqlite::Result<DealVersion> {
+    Ok(DealVersion {
+        id: row.get("id")?,
+        deal_id: row.get("deal_id")?,
+        seq: row.get("seq")?,
+        kind: row.get("kind")?,
+        template_id: row.get("template_id")?,
+        provider: row.get("provider")?,
+        content: row.get("content")?,
+        note: row.get("note")?,
+        source_ids: row.get("source_ids")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+/// Touch deal.updated_at = now. Called after any mutation (add/remove source,
+/// new version, manual edit) so the list UI's "updated" sort stays correct.
+fn touch_deal(conn: &rusqlite::Connection, deal_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE deal SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![deal_id, now_iso8601()],
+    )
+    .map_err(|e| format!("Touch deal failed: {}", e))?;
+    Ok(())
+}
+
+/// Load one deal row or a clean "not found" error.
+fn load_deal(conn: &rusqlite::Connection, deal_id: &str) -> Result<Deal, String> {
+    conn.query_row(
+        "SELECT id, name, status, created_at, updated_at FROM deal WHERE id = ?1",
+        [deal_id],
+        map_deal,
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => "Deal not found".to_string(),
+        other => format!("Load deal failed: {}", other),
+    })
+}
+
+/// Load all sources for a deal, oldest first (generation order = attach order).
+fn load_sources(conn: &rusqlite::Connection, deal_id: &str) -> Result<Vec<DealSource>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, deal_id, kind, name, content, added_at
+             FROM source WHERE deal_id = ?1 ORDER BY added_at ASC, id ASC",
+        )
+        .map_err(|e| format!("Prepare sources failed: {}", e))?;
+    let rows = stmt
+        .query_map([deal_id], map_source)
+        .map_err(|e| format!("Query sources failed: {}", e))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("Read source row failed: {}", e))?);
+    }
+    Ok(out)
+}
+
+// ── Deal CRUD commands ──────────────────────────────────────────────
+
+#[tauri::command]
+fn deal_create(app: tauri::AppHandle, name: String) -> Result<Deal, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Deal name is required".to_string());
+    }
+    let conn = open_db(&app)?;
+    let id = gen_id("deal");
+    let now = now_iso8601();
+    conn.execute(
+        "INSERT INTO deal (id, name, status, created_at, updated_at)
+         VALUES (?1, ?2, 'active', ?3, ?3)",
+        rusqlite::params![id, trimmed, now],
+    )
+    .map_err(|e| format!("Create deal failed: {}", e))?;
+    Ok(Deal {
+        id,
+        name: trimmed.to_string(),
+        status: "active".to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// List deals for the sidebar, newest-updated first, each with rolled-up
+/// version + source counts and the latest version seq.
+#[tauri::command]
+fn deal_list(app: tauri::AppHandle) -> Result<Vec<DealListRow>, String> {
+    let conn = open_db(&app)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.id, d.name, d.status, d.created_at, d.updated_at,
+                    COALESCE((SELECT MAX(seq)   FROM version v WHERE v.deal_id = d.id), 0) AS latest_seq,
+                    (SELECT COUNT(*) FROM version v WHERE v.deal_id = d.id)               AS version_count,
+                    (SELECT COUNT(*) FROM source  s WHERE s.deal_id = d.id)               AS source_count
+             FROM deal d
+             ORDER BY d.updated_at DESC, d.id DESC",
+        )
+        .map_err(|e| format!("Prepare deal_list failed: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let deal = map_deal(row)?;
+            let updated_at = deal.updated_at.clone();
+            Ok(DealListRow {
+                deal,
+                latest_seq: row.get("latest_seq")?,
+                version_count: row.get("version_count")?,
+                source_count: row.get("source_count")?,
+                updated_at,
+            })
+        })
+        .map_err(|e| format!("Query deal_list failed: {}", e))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("Read deal row failed: {}", e))?);
+    }
+    Ok(out)
+}
+
+/// Full deal detail: the deal, all versions (newest seq first), all sources.
+#[tauri::command]
+fn deal_get(app: tauri::AppHandle, id: String) -> Result<DealDetail, String> {
+    let conn = open_db(&app)?;
+    let deal = load_deal(&conn, &id)?;
+    let sources = load_sources(&conn, &id)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, deal_id, seq, kind, template_id, provider, content, note, source_ids, created_at
+             FROM version WHERE deal_id = ?1 ORDER BY seq DESC",
+        )
+        .map_err(|e| format!("Prepare versions failed: {}", e))?;
+    let rows = stmt
+        .query_map([&id], map_version)
+        .map_err(|e| format!("Query versions failed: {}", e))?;
+    let mut versions = Vec::new();
+    for r in rows {
+        versions.push(r.map_err(|e| format!("Read version row failed: {}", e))?);
+    }
+
+    Ok(DealDetail {
+        deal,
+        versions,
+        sources,
+    })
+}
+
+#[tauri::command]
+fn deal_rename(app: tauri::AppHandle, id: String, name: String) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Deal name is required".to_string());
+    }
+    let conn = open_db(&app)?;
+    let n = conn
+        .execute(
+            "UPDATE deal SET name = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, trimmed, now_iso8601()],
+        )
+        .map_err(|e| format!("Rename failed: {}", e))?;
+    if n == 0 {
+        return Err("Deal not found".to_string());
+    }
+    Ok(())
+}
+
+/// Delete a deal. ON DELETE CASCADE drops its sources + versions too (foreign
+/// keys are enabled in open_db). A missing deal is a no-op success.
+#[tauri::command]
+fn deal_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    conn.execute("DELETE FROM deal WHERE id = ?1", [&id])
+        .map_err(|e| format!("Delete deal failed: {}", e))?;
+    Ok(())
+}
+
+// ── Source CRUD commands ────────────────────────────────────────────
+
+#[tauri::command]
+fn deal_add_source(
+    app: tauri::AppHandle,
+    deal_id: String,
+    kind: String,
+    name: String,
+    content: String,
+) -> Result<DealSource, String> {
+    let kind = kind.trim().to_lowercase();
+    if !matches!(kind.as_str(), "pdf" | "text" | "url") {
+        return Err(format!("Invalid source kind: {} (pdf|text|url)", kind));
+    }
+    // For a PDF the content is base64 — enforce the same 5 MiB cap the rest of
+    // the app uses (decode_pdf_base64 also size-checks the decoded bytes).
+    if kind == "pdf" {
+        decode_pdf_base64(content.trim())?;
+    }
+    if content.trim().is_empty() {
+        return Err("Source content is empty".to_string());
+    }
+    let conn = open_db(&app)?;
+    // Make sure the deal exists (FK would reject the insert anyway, but a clean
+    // error beats a raw constraint message).
+    load_deal(&conn, &deal_id)?;
+
+    let id = gen_id("src");
+    let now = now_iso8601();
+    let display_name = {
+        let n = name.trim();
+        if n.is_empty() {
+            kind.to_uppercase()
+        } else {
+            n.to_string()
+        }
+    };
+    conn.execute(
+        "INSERT INTO source (id, deal_id, kind, name, content, added_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![id, deal_id, kind, display_name, content.trim(), now],
+    )
+    .map_err(|e| format!("Add source failed: {}", e))?;
+    touch_deal(&conn, &deal_id)?;
+
+    Ok(DealSource {
+        id,
+        deal_id,
+        kind,
+        name: display_name,
+        content: content.trim().to_string(),
+        added_at: now,
+    })
+}
+
+#[tauri::command]
+fn deal_remove_source(app: tauri::AppHandle, source_id: String) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    // Capture the deal_id before delete so we can touch it afterward.
+    let deal_id: Option<String> = conn
+        .query_row(
+            "SELECT deal_id FROM source WHERE id = ?1",
+            [&source_id],
+            |r| r.get(0),
+        )
+        .ok();
+    conn.execute("DELETE FROM source WHERE id = ?1", [&source_id])
+        .map_err(|e| format!("Remove source failed: {}", e))?;
+    if let Some(d) = deal_id {
+        touch_deal(&conn, &d)?;
+    }
+    Ok(())
+}
+
+// ── Version commands ────────────────────────────────────────────────
+
+#[tauri::command]
+fn version_get(app: tauri::AppHandle, id: String) -> Result<DealVersion, String> {
+    let conn = open_db(&app)?;
+    conn.query_row(
+        "SELECT id, deal_id, seq, kind, template_id, provider, content, note, source_ids, created_at
+         FROM version WHERE id = ?1",
+        [&id],
+        map_version,
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => "Version not found".to_string(),
+        other => format!("Load version failed: {}", other),
+    })
+}
+
+/// Insert a version with EXPLICIT, already-generated content (no LLM call).
+/// This is the "Save to deal" entry from the one-shot generate flows: the user
+/// has a finished memo/IC in hand and wants it captured as a version without
+/// paying to re-generate. seq is the deal's next; source_ids snapshots whatever
+/// sources the deal currently has (the run's source was just added). Mirrors the
+/// persistence tail of deal_generate_version but skips all the generation.
+#[tauri::command]
+fn version_create(
+    app: tauri::AppHandle,
+    deal_id: String,
+    kind: String,
+    template_id: String,
+    provider: String,
+    content: String,
+    note: Option<String>,
+) -> Result<DealVersion, String> {
+    let kind = kind.trim().to_lowercase();
+    if !matches!(kind.as_str(), "memo" | "ic") {
+        return Err(format!("Invalid kind: {} (memo|ic)", kind));
+    }
+    if content.trim().is_empty() {
+        return Err("Version content is empty".to_string());
+    }
+    let conn = open_db(&app)?;
+    load_deal(&conn, &deal_id)?; // 404 early if the deal is gone
+
+    let next_seq: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM version WHERE deal_id = ?1",
+            [&deal_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("Compute seq failed: {}", e))?;
+
+    // Snapshot the deal's current source ids (the run's source was just added).
+    let sources = load_sources(&conn, &deal_id)?;
+    let ids: Vec<&str> = sources.iter().map(|s| s.id.as_str()).collect();
+    let source_ids_json =
+        serde_json::to_string(&ids).map_err(|e| format!("Serialise source ids failed: {}", e))?;
+
+    let note = note
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| format!("v{} · {} sources", next_seq, sources.len()));
+
+    let ver_id = gen_id("ver");
+    let now = now_iso8601();
+    conn.execute(
+        "INSERT INTO version
+            (id, deal_id, seq, kind, template_id, provider, content, note, source_ids, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            ver_id,
+            deal_id,
+            next_seq,
+            kind,
+            template_id,
+            provider,
+            content,
+            note,
+            source_ids_json,
+            now
+        ],
+    )
+    .map_err(|e| format!("Save version failed: {}", e))?;
+    touch_deal(&conn, &deal_id)?;
+
+    Ok(DealVersion {
+        id: ver_id,
+        deal_id,
+        seq: next_seq,
+        kind,
+        template_id,
+        provider,
+        content,
+        note,
+        source_ids: source_ids_json,
+        created_at: now,
+    })
+}
+
+/// Manual edit of a version's markdown (the user tweaks generated output).
+/// Bumps the parent deal's updated_at.
+#[tauri::command]
+fn version_update_content(
+    app: tauri::AppHandle,
+    version_id: String,
+    content: String,
+) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    let deal_id: String = conn
+        .query_row(
+            "SELECT deal_id FROM version WHERE id = ?1",
+            [&version_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => "Version not found".to_string(),
+            other => format!("Load version failed: {}", other),
+        })?;
+    conn.execute(
+        "UPDATE version SET content = ?2 WHERE id = ?1",
+        rusqlite::params![version_id, content],
+    )
+    .map_err(|e| format!("Update version failed: {}", e))?;
+    touch_deal(&conn, &deal_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn deal_delete_version(app: tauri::AppHandle, version_id: String) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    let deal_id: Option<String> = conn
+        .query_row(
+            "SELECT deal_id FROM version WHERE id = ?1",
+            [&version_id],
+            |r| r.get(0),
+        )
+        .ok();
+    conn.execute("DELETE FROM version WHERE id = ?1", [&version_id])
+        .map_err(|e| format!("Delete version failed: {}", e))?;
+    if let Some(d) = deal_id {
+        touch_deal(&conn, &d)?;
+    }
+    Ok(())
+}
+
+// ── THE KEY COMMAND — multi-source version generation ───────────────
+//
+// Build a NEW version from ALL the deal's accumulated sources (full re-generate,
+// not a delta). Reuses the Phase-1 native-PDF architecture: each source is
+// routed through resolve_source so a PDF goes NATIVELY to a capable provider
+// (anthropic/openai/gemini/vhs) as its own document block, while text/url
+// sources become labelled text. Text-only providers (local/nvidia) get every
+// source's extracted text concatenated, labelled by source name.
+//
+// A source that can't be read (PDF panic, dead URL) is SKIPPED with a note in
+// the combined text rather than failing the whole generation.
+
+/// One resolved source ready to feed a generation call: its label (for the
+/// text slot) and, when the provider reads PDFs natively, the raw base64.
+struct ResolvedDealSource {
+    label: String,
+    /// The text to drop into the prompt's <source> slot for this source. For a
+    /// native PDF this is the placeholder; for text/url/extracted-pdf it's the
+    /// actual text. For an unreadable source it's a short skip note.
+    text: String,
+    /// Some(base64) ONLY when this is a PDF AND the provider reads PDFs natively.
+    native_pdf: Option<String>,
+}
+
+/// Resolve one stored source for a given provider, never failing — an
+/// unreadable source comes back as a skip note so the batch survives.
+async fn resolve_one_deal_source(
+    provider: &str,
+    src: &DealSource,
+) -> ResolvedDealSource {
+    let label = format!("{} ({})", src.name, src.kind.to_uppercase());
+    match src.kind.as_str() {
+        "url" => match resolve_source(provider, Some(&src.content), None, None, false).await {
+            Ok((text, pdf)) => ResolvedDealSource { label, text, native_pdf: pdf },
+            Err(e) => ResolvedDealSource {
+                label: label.clone(),
+                text: format!("[skipped — could not fetch this URL: {}]", e),
+                native_pdf: None,
+            },
+        },
+        "pdf" => match resolve_source(provider, None, None, Some(&src.content), false).await {
+            Ok((text, pdf)) => ResolvedDealSource { label, text, native_pdf: pdf },
+            Err(e) => ResolvedDealSource {
+                label: label.clone(),
+                text: format!("[skipped — could not read this PDF: {}]", e),
+                native_pdf: None,
+            },
+        },
+        // "text" and anything else: treat content as raw pasted text.
+        _ => match resolve_source(provider, None, Some(&src.content), None, false).await {
+            Ok((text, pdf)) => ResolvedDealSource { label, text, native_pdf: pdf },
+            Err(e) => ResolvedDealSource {
+                label: label.clone(),
+                text: format!("[skipped — could not read this source: {}]", e),
+                native_pdf: None,
+            },
+        },
+    }
+}
+
+/// Fold resolved sources into ONE labelled text block for the prompt's source
+/// slot. Each source gets a "=== <label> ===" header so the model can tell them
+/// apart. The native-PDF placeholder lines through unchanged (it already reads
+/// "the source is attached as a PDF"), so the model knows to look at the
+/// attached document(s) for those entries.
+fn combine_source_text(resolved: &[ResolvedDealSource]) -> String {
+    if resolved.is_empty() {
+        return String::new();
+    }
+    resolved
+        .iter()
+        .map(|r| format!("=== SOURCE: {} ===\n{}", r.label, r.text))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Anthropic call with MULTIPLE native PDF document blocks + the prompt. Mirrors
+/// call_anthropic_memo but takes a slice of base64 PDFs instead of one Option.
+async fn call_anthropic_multi(
+    client: &reqwest::Client,
+    key: &str,
+    user_prompt: &str,
+    pdfs: &[String],
+) -> Result<String, String> {
+    let mut content: Vec<serde_json::Value> = pdfs
+        .iter()
+        .map(|pdf| {
+            serde_json::json!({
+                "type": "document",
+                "source": { "type": "base64", "media_type": "application/pdf", "data": pdf }
+            })
+        })
+        .collect();
+    content.push(serde_json::json!({ "type": "text", "text": user_prompt }));
+    let body = serde_json::json!({
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 2000,
+        "messages": [{ "role": "user", "content": content }]
+    });
+    let res = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.chars().filter(|c| !matches!(c, '\n' | '\r' | '\t')).take(80).collect::<String>()
+        ));
+    }
+    let parsed: AnthropicReply = res.json().await.map_err(|e| e.to_string())?;
+    let text = parsed
+        .content
+        .into_iter()
+        .filter(|b| b.block_type == "text")
+        .filter_map(|b| b.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err("Empty response from Anthropic".to_string());
+    }
+    Ok(text)
+}
+
+/// OpenAI call with MULTIPLE native PDF file parts + the prompt. gpt-4o (not
+/// -mini) is required for PDF parts. Mirrors call_openai_memo's PDF branch.
+async fn call_openai_multi(
+    client: &reqwest::Client,
+    key: &str,
+    user_prompt: &str,
+    pdfs: &[String],
+) -> Result<String, String> {
+    let mut content: Vec<serde_json::Value> = pdfs
+        .iter()
+        .enumerate()
+        .map(|(i, pdf)| {
+            serde_json::json!({
+                "type": "file",
+                "file": {
+                    "filename": format!("source-{}.pdf", i + 1),
+                    "file_data": format!("data:application/pdf;base64,{}", pdf)
+                }
+            })
+        })
+        .collect();
+    content.push(serde_json::json!({ "type": "text", "text": user_prompt }));
+    let body = serde_json::json!({
+        "model": "gpt-4o",
+        "max_tokens": 2000,
+        "messages": [{ "role": "user", "content": content }]
+    });
+    let res = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(key)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.chars().filter(|c| !matches!(c, '\n' | '\r' | '\t')).take(80).collect::<String>()
+        ));
+    }
+    let parsed: OpenAiReply = res.json().await.map_err(|e| e.to_string())?;
+    let text = parsed
+        .choices
+        .into_iter()
+        .filter_map(|c| c.message.content)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err("Empty response from OpenAI".to_string());
+    }
+    Ok(text)
+}
+
+/// Gemini call with MULTIPLE native PDF inline_data parts + the prompt. Mirrors
+/// call_gemini_memo's PDF branch.
+async fn call_gemini_multi(
+    client: &reqwest::Client,
+    key: &str,
+    user_prompt: &str,
+    pdfs: &[String],
+) -> Result<String, String> {
+    let mut parts: Vec<serde_json::Value> = pdfs
+        .iter()
+        .map(|pdf| {
+            serde_json::json!({ "inline_data": { "mime_type": "application/pdf", "data": pdf } })
+        })
+        .collect();
+    parts.push(serde_json::json!({ "text": user_prompt }));
+    let body = serde_json::json!({
+        "contents": [{ "parts": parts }],
+        "generationConfig": { "maxOutputTokens": 2000 }
+    });
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={}",
+        key
+    );
+    let res = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.chars().filter(|c| !matches!(c, '\n' | '\r' | '\t')).take(80).collect::<String>()
+        ));
+    }
+    let parsed: GeminiReply = res.json().await.map_err(|e| e.to_string())?;
+    let text = parsed
+        .candidates
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| c.content)
+        .filter_map(|c| c.parts)
+        .flatten()
+        .filter_map(|p| p.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err("Empty response from Gemini".to_string());
+    }
+    Ok(text)
+}
+
+/// Dispatch ONE generation call across the combined sources for a provider.
+/// `pdfs` is the set of native-PDF base64 blobs (empty for text-only providers,
+/// which already have everything in `combined_text`). For the hosted path each
+/// PDF is sent through call_vhs_generate (which takes a single optional PDF) by
+/// merging — but the deal generation path uses BYO/local providers; vhs is
+/// handled by passing the first PDF natively + the rest as extracted text is NOT
+/// done here (see note in deal_generate_version where we route vhs).
+async fn dispatch_combined_call(
+    client: &reqwest::Client,
+    provider: &str,
+    key: &str,
+    prompt: &str,
+    pdfs: &[String],
+) -> Result<String, String> {
+    match provider {
+        "anthropic" => {
+            if pdfs.is_empty() {
+                call_anthropic_memo(client, key, prompt, None).await
+            } else {
+                call_anthropic_multi(client, key, prompt, pdfs).await
+            }
+        }
+        "openai" => {
+            if pdfs.is_empty() {
+                call_openai_memo(client, key, prompt, None).await
+            } else {
+                call_openai_multi(client, key, prompt, pdfs).await
+            }
+        }
+        "gemini" => {
+            if pdfs.is_empty() {
+                call_gemini_memo(client, key, prompt, None).await
+            } else {
+                call_gemini_multi(client, key, prompt, pdfs).await
+            }
+        }
+        "nvidia" => call_nvidia_memo(client, key, prompt).await,
+        "local" => call_local_memo(client, prompt).await,
+        other => Err(format!("Unknown provider: {}", other)),
+    }
+}
+
+/// The IC section sequence for a full re-generate. Mirrors the frontend's
+/// full-ic scope (founder → market → traction → terms → compile). We always run
+/// the full set for a deal version — simple-ic is a Quick-Memo-tier concern.
+const IC_DEAL_SECTIONS: &[&str] = &["founder", "market", "traction", "terms", "compile"];
+
+#[tauri::command]
+async fn deal_generate_version(
+    app: tauri::AppHandle,
+    deal_id: String,
+    kind: String,
+    template_id: String,
+    provider: String,
+    note: Option<String>,
+) -> Result<DealVersion, String> {
+    let kind = kind.trim().to_lowercase();
+    if !matches!(kind.as_str(), "memo" | "ic") {
+        return Err(format!("Invalid kind: {} (memo|ic)", kind));
+    }
+
+    // 1. Load the deal + ALL its sources up front (these are quick local reads).
+    //    We then drop the Connection BEFORE the await-heavy generation so we
+    //    aren't holding a non-Send rusqlite Connection across .await points.
+    let (sources, next_seq, source_ids_json) = {
+        let conn = open_db(&app)?;
+        load_deal(&conn, &deal_id)?; // 404 early if the deal is gone
+        let sources = load_sources(&conn, &deal_id)?;
+        if sources.is_empty() {
+            return Err("This deal has no sources yet — add a deck, text, or URL first".to_string());
+        }
+        let next_seq: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM version WHERE deal_id = ?1",
+                [&deal_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("Compute seq failed: {}", e))?;
+        let ids: Vec<&str> = sources.iter().map(|s| s.id.as_str()).collect();
+        let source_ids_json =
+            serde_json::to_string(&ids).map_err(|e| format!("Serialise source ids failed: {}", e))?;
+        (sources, next_seq, source_ids_json)
+    };
+
+    // 2. Read the provider key (none for local). Hosted "vhs" uses the device
+    //    token via call_vhs_generate, not a BYO key.
+    let key = match provider.as_str() {
+        "local" => Zeroizing::new(String::new()),
+        "vhs" => Zeroizing::new(String::new()),
+        _ => read_key(&provider)?,
+    };
+
+    // 3. Resolve EVERY source for this provider (PDFs native where supported).
+    //    An unreadable source becomes a labelled skip note, never a hard error.
+    let mut resolved: Vec<ResolvedDealSource> = Vec::with_capacity(sources.len());
+    for s in &sources {
+        resolved.push(resolve_one_deal_source(&provider, s).await);
+    }
+    let combined_text = combine_source_text(&resolved);
+    let pdfs: Vec<String> = resolved
+        .iter()
+        .filter_map(|r| r.native_pdf.clone())
+        .collect();
+
+    let client = no_redirect_client(120)?;
+    let n_sources = sources.len();
+
+    // 4. Generate. memo → one combined call; ic → the multi-section loop, each
+    //    section seeing the SAME combined sources, sharing ONE reportId (hosted).
+    let report_id = gen_id("rpt"); // shared across hosted sub-calls for metering
+    let content: String = if kind == "memo" {
+        let prompt = build_memo_prompt(&combined_text, "", "full-memo", None);
+        if provider == "vhs" {
+            // Hosted relay: send the first PDF natively (the server contract takes
+            // ONE pdf); any further PDFs already line through combined_text only as
+            // the placeholder, so for >1 native PDF on hosted we fall back to the
+            // combined text being authoritative. Single-PDF (the common deck case)
+            // is fully native.
+            let (memo, _quota) =
+                call_vhs_generate("memo", &prompt, 2000, &report_id, pdfs.first().map(|s| s.as_str()))
+                    .await?;
+            memo
+        } else {
+            dispatch_combined_call(&client, &provider, key.as_str(), &prompt, &pdfs).await?
+        }
+    } else {
+        // IC: run the existing section sequence, each section seeing the combined
+        // sources + the prior sections, then the compile pass folds them.
+        let mut prior_sections: Vec<IcPriorSection> = Vec::new();
+        for section in IC_DEAL_SECTIONS {
+            // Build the prior-context block with the same caps the live IC path uses.
+            const PER_SECTION_CAP: usize = 8_000;
+            const CUMULATIVE_CAP: usize = 24_000;
+            let mut prior_chunks: Vec<String> = Vec::new();
+            let mut cumulative = 0usize;
+            for ps in &prior_sections {
+                let section_text: String = ps.content.chars().take(PER_SECTION_CAP).collect();
+                let chunk = format!("[{}]\n{}", ps.section.to_uppercase(), section_text);
+                if cumulative + chunk.len() > CUMULATIVE_CAP {
+                    break;
+                }
+                cumulative += chunk.len();
+                prior_chunks.push(chunk);
+            }
+            let prior = prior_chunks.join("\n\n");
+
+            let prompt = ic_section_prompt(
+                section,
+                "full-ic",
+                "",
+                &combined_text,
+                "",
+                &prior,
+                None,
+            )?;
+
+            let section_text = if provider == "vhs" {
+                let (text, _quota) = call_vhs_generate(
+                    "report",
+                    &prompt,
+                    2000,
+                    &report_id,
+                    pdfs.first().map(|s| s.as_str()),
+                )
+                .await?;
+                text
+            } else {
+                dispatch_combined_call(&client, &provider, key.as_str(), &prompt, &pdfs).await?
+            };
+
+            prior_sections.push(IcPriorSection {
+                section: section.to_string(),
+                content: section_text,
+            });
+        }
+        // The compiled memo is the last section's output.
+        prior_sections
+            .last()
+            .map(|s| s.content.clone())
+            .unwrap_or_default()
+    };
+
+    if content.trim().is_empty() {
+        return Err("Generation produced empty output".to_string());
+    }
+
+    // 5. Persist the new version. Default note = "v{seq} · {n} sources".
+    let note = note
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| format!("v{} · {} sources", next_seq, n_sources));
+    let ver_id = gen_id("ver");
+    let now = now_iso8601();
+    {
+        let conn = open_db(&app)?;
+        conn.execute(
+            "INSERT INTO version
+                (id, deal_id, seq, kind, template_id, provider, content, note, source_ids, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                ver_id,
+                deal_id,
+                next_seq,
+                kind,
+                template_id,
+                provider,
+                content,
+                note,
+                source_ids_json,
+                now
+            ],
+        )
+        .map_err(|e| format!("Save version failed: {}", e))?;
+        touch_deal(&conn, &deal_id)?;
+    }
+
+    Ok(DealVersion {
+        id: ver_id,
+        deal_id,
+        seq: next_seq,
+        kind,
+        template_id,
+        provider,
+        content,
+        note,
+        source_ids: source_ids_json,
+        created_at: now,
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -2991,7 +4267,20 @@ pub fn run() {
             list_reports,
             load_report,
             delete_report,
-            save_export_file
+            save_export_file,
+            // Deals + version history (W4/W5 — SQLite)
+            deal_create,
+            deal_list,
+            deal_get,
+            deal_rename,
+            deal_delete,
+            deal_add_source,
+            deal_remove_source,
+            version_get,
+            version_create,
+            version_update_content,
+            deal_delete_version,
+            deal_generate_version
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

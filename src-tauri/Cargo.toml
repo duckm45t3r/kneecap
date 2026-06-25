@@ -50,4 +50,9 @@ zeroize = { version = "=1.8.1", features = ["derive"] }
 # OCR — out of scope for now (we error gracefully on empty extract).
 pdf-extract = "=0.7.7"
 base64 = "=0.22.1"
+# Deals + version history (W4/W5). Bundled SQLite — no system libsqlite3
+# dependency, so the build is self-contained on every dev/CI machine. The DB
+# lives at {app_data_dir}/kneecap.db; see the "Deals + version history" section
+# in lib.rs. Pinned to an exact patch like the other security-sensitive deps.
+rusqlite = { version = "=0.31.0", features = ["bundled"] }
 
