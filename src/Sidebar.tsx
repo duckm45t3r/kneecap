@@ -89,12 +89,12 @@ export function Sidebar({
 
       <div className="kn-sidebar-section">
         <div className="kn-sidebar-heading">
-          Deals
+          Reports
           <span className="kn-sidebar-count">{deals.length}</span>
         </div>
         {deals.length === 0 ? (
           <p className="kn-sidebar-empty">
-            No deals yet. Generate a report and hit “Save to deal”.
+            No reports yet. Generate one and hit “Save to report”.
           </p>
         ) : (
           <ul className="kn-sidebar-list">
@@ -111,7 +111,7 @@ export function Sidebar({
                   title={d.deal.name}
                 >
                   <span className="kn-sidebar-report-title">
-                    {d.deal.name || "Untitled deal"}
+                    {d.deal.name || "Untitled report"}
                   </span>
                   <span className="kn-sidebar-report-meta">
                     {d.latest_seq > 0 ? `v${d.latest_seq}` : "no versions"}

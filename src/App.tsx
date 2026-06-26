@@ -476,14 +476,14 @@ function App() {
       .catch((e) => console.error("hydrateCustomTemplates failed", e));
   }, [refreshProviders, refreshDeals, refreshTemplates]);
 
-  // Try to load the usage gauge on mount and whenever link state changes.
-  // vhs_usage itself decides: if a token is present it returns data (gauge
-  // shows); if not, it errors and refreshUsage hides the gauge. We don't clear
-  // on a (possibly stale) vhsLinked=false, so a Keychain-timing miss on startup
-  // can't wrongly hide a real link.
-  useEffect(() => {
-    refreshUsage();
-  }, [vhsLinked, refreshUsage]);
+  // Do NOT refresh the usage gauge on mount. vhs_usage reads the VHS token from
+  // the macOS Keychain, which pops a password prompt at EVERY startup (the exact
+  // bug we're killing). Link state comes from the marker (no read), so the
+  // "VHS-hosted" provider still shows without touching the Keychain. The gauge
+  // populates after the first hosted generation (onUsageChange) — when the token
+  // is read anyway — so startup stays Keychain-silent.
+  // (Follow-up option: persist the last usage snapshot to a file so the gauge can
+  //  show a cached value on startup without any read.)
 
   const goHome = useCallback(() => {
     setSelectedDealId(null);
@@ -509,7 +509,7 @@ function App() {
     setSelectedDealId(null);
     setView("home");
     await refreshDeals();
-    showToast("Deal deleted");
+    showToast("Report deleted");
   }, [refreshDeals, showToast]);
 
   const handleGenerateTemplate = useCallback((id: string) => {
@@ -1915,7 +1915,7 @@ function QuickMemo({
           <>
             {onSaveToDeal && (
               <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
-                Save to deal
+                Save to report
               </button>
             )}
             <button className="kn-btn" onClick={handleCopy}>
@@ -2231,7 +2231,7 @@ function IcReport({
             <>
               {onSaveToDeal && (
                 <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
-                  Save to deal
+                  Save to report
                 </button>
               )}
               <button className="kn-btn" onClick={handleCopyCompile}>
@@ -2995,7 +2995,7 @@ function GenerateFromTemplate({
           <>
             {onSaveToDeal && (
               <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
-                Save to deal
+                Save to report
               </button>
             )}
             <button className="kn-btn" onClick={handleCopy}>

@@ -145,7 +145,7 @@ export function DealView({
         <button className="kn-back" onClick={onBack}>
           ← Back
         </button>
-        <p className="kn-flow-sub">Loading deal…</p>
+        <p className="kn-flow-sub">Loading report…</p>
       </div>
     );
   }
@@ -157,7 +157,7 @@ export function DealView({
           ← Back
         </button>
         <div className="kn-form-feedback kn-form-feedback--err">
-          ✗ This deal could not be found — it may have been deleted.
+          ✗ This report could not be found — it may have been deleted.
         </div>
       </div>
     );
@@ -267,13 +267,13 @@ function DealHeader({
   const save = async () => {
     const name = draft.trim();
     if (!name) {
-      showToast("Deal name is required");
+      showToast("Report name is required");
       return;
     }
     try {
       await renameDeal(deal.id, name);
       setEditing(false);
-      showToast("Deal renamed");
+      showToast("Report renamed");
       onRenamed();
     } catch (e) {
       showToast(`Rename failed: ${String(e)}`);
@@ -340,7 +340,7 @@ function DealHeader({
                 className="kn-btn kn-btn--ghost"
                 onClick={() => setConfirmDelete(true)}
               >
-                Delete deal
+                Delete report
               </button>
             )}
           </div>
@@ -392,7 +392,7 @@ function SourcesPanel({
       </div>
 
       <p className="kn-deal-panel-hint">
-        Everything the deal has accumulated — decks, text, links. A new version
+        Everything the report has accumulated — decks, text, links. A new version
         is generated from all of these at once.
       </p>
 
@@ -577,7 +577,7 @@ function AddSourceForm({
 
       <div className="kn-form-actions" style={{ marginTop: 12 }}>
         <button className="kn-btn kn-btn--primary" onClick={submit} disabled={!canAdd}>
-          {busy ? "Adding…" : "Add to deal"}
+          {busy ? "Adding…" : "Add to report"}
         </button>
         <button className="kn-btn kn-btn--ghost" onClick={onCancel} disabled={busy}>
           Cancel
@@ -622,7 +622,7 @@ function VersionsPanel({
       </div>
 
       <p className="kn-deal-panel-hint">
-        The deal's history. Each version is a full re-generate from all sources
+        The report's history. Each version is a full re-generate from all sources
         at that point in time. Newest first.
       </p>
 
@@ -761,7 +761,7 @@ function VersionViewer({
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
-        ← Back to deal
+        ← Back to report
       </button>
 
       <h2 className="kn-flow-title">
@@ -932,7 +932,7 @@ function NewVersionModal({
         <h3 className="kn-result-title">New version</h3>
         <p className="kn-flow-sub">
           Re-generates from all {sourceCount} source{sourceCount === 1 ? "" : "s"}{" "}
-          in this deal. This will be v{nextSeq}.
+          in this report. This will be v{nextSeq}.
         </p>
 
         <div className="kn-flow-row">
