@@ -160,6 +160,37 @@ Make KN33C4P installable + self-updating outside the dev machine.
 
 ---
 
+## W6 — Dealflow cockpit (PLANNED — queued after current verify)
+
+Decided 2026-06-26. Bring VHS's **dealflow + pipeline** features into the kneecap
+desktop GUI so the app becomes the VC's desktop cockpit: browse the (controlled)
+screened dealflow → **one-click generate an IC memo on a company** → all in one app.
+This closes the loop between screening (VHS web) and analysis (kneecap IC gen).
+
+**How:** reuse the existing device bearer (`kc_…`) + the VHS backend
+(Company / WeeklyBatch / UserDecision / deal-room) + new `/api/kneecap/*`
+endpoints (reusing the existing gate + queries) + desktop UI. Same backend,
+second client.
+
+**Controlled-access red line (explicitly NOT a full DB dump):**
+- Server-authoritative, on-demand paginated fetch. **No "download full DB" / no
+  full local cache. No bulk export.** Rate-limited.
+- Show only what the user **already has web access to** (their batches / pipeline),
+  not the entire historical database.
+- Verdicts shown softly (internal opinion, not a published claim); raw VHS
+  verdicts may stay server-side / not be pushed to the client at all.
+
+**Why "expose the full screened+verdicted US/TW database" was REJECTED:** core
+IP / moat (a paying subscriber could scrape it and churn), legal exposure
+(distributing verdicts on named private companies → defamation / data-licensing /
+privacy across two jurisdictions), business-model (full export → cancel), founder/
+ecosystem trust, and a desktop client is harder to protect against bulk capture
+than the web. So: build the **features** under controlled access; do **not** ship
+the full database.
+
+**On start:** produce a phased design first (which features migrate first /
+controlled-access design / verdict-presentation tiers).
+
 ## Branch map (as of this work)
 
 | Branch                              | Contains            | State                |
