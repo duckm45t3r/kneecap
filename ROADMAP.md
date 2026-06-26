@@ -7,6 +7,15 @@ It runs against your own LLM key, a local Ollama model, or the VHS-hosted model.
 This file is the single source of truth for what is built, what is on a branch,
 and what is next. It uses one taxonomy: **W1 through W5**.
 
+> ⚠️ **2026-06-26: the W3/W4/W5 sections below are partly superseded.** The
+> 2026-06-25/26 work (deals + version history in local SQLite, per-report hosted
+> billing with a $20 backend ceiling + no-dollars gauge, hosted multi-PDF via the
+> presigned/Supabase path, Nvidia/Nemotron, Keychain lazy-load, Format Learning,
+> PDF/DOCX export) is captured accurately in **[`STATE_2026-06-26.md`](STATE_2026-06-26.md)** —
+> read that for the current truth. Notably the old "$42 / 20 reports / $2 overage"
+> model and the "`/generate` is a stub" / "Format Learning not built" notes below
+> are **out of date**.
+
 ---
 
 ## Why the wave numbers were a mess (and what we use now)
