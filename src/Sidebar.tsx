@@ -49,6 +49,7 @@ export function Sidebar({
   onOpenDeal,
   onGenerateTemplate,
   usageSlot,
+  themeSlot,
 }: {
   activeNav: SidebarNav | null;
   selectedDealId: string | null;
@@ -60,6 +61,8 @@ export function Sidebar({
   // W5: hosted usage gauge (compact). Rendered by App so the gauge logic stays
   // in one place; null when VHS isn't linked.
   usageSlot?: ReactNode;
+  // Compact ink/paper theme toggle, rendered in the footer. Always present.
+  themeSlot?: ReactNode;
 }) {
   return (
     <aside className="kn-sidebar">
@@ -148,7 +151,17 @@ export function Sidebar({
         </ul>
       </div>
 
-      {usageSlot && <div className="kn-sidebar-footer">{usageSlot}</div>}
+      {(usageSlot || themeSlot) && (
+        <div className="kn-sidebar-footer">
+          {usageSlot}
+          {themeSlot && (
+            <div className="kn-sidebar-theme">
+              <span className="kn-sidebar-theme-label">Theme</span>
+              {themeSlot}
+            </div>
+          )}
+        </div>
+      )}
     </aside>
   );
 }

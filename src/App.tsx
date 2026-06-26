@@ -22,6 +22,7 @@ import { exportReportToPdf, exportReportToDocx } from "./reports/exportReport";
 import { listDeals, type DealListRow } from "./deals/dealStore";
 import { DealView } from "./deals/DealView";
 import { SaveToDealModal, type RunSource } from "./deals/SaveToDeal";
+import { useTheme, type Theme } from "./theme";
 import "./App.css";
 
 /**
@@ -55,6 +56,50 @@ function MarkdownView({ source }: { source: string }) {
     >
       {source}
     </ReactMarkdown>
+  );
+}
+
+// ─── Theme toggle ─────────────────────────────────────────────────────
+//
+// Ink (dark) / Paper (light) segmented switch. The actual repaint happens via
+// the <html data-theme> attribute + CSS token override (src/vhs-tokens.css);
+// this is just the control. `useTheme` owns persistence (localStorage) and the
+// attribute sync. Two presentations share one piece of state:
+//   variant="full"    — labelled segmented control for Settings
+//   variant="compact" — icon-pair for the sidebar footer
+const THEME_OPTIONS: { value: Theme; label: string; glyph: string }[] = [
+  { value: "ink", label: "Ink", glyph: "◑" },
+  { value: "paper", label: "Paper", glyph: "◐" },
+];
+
+function ThemeToggle({ variant = "full" }: { variant?: "full" | "compact" }) {
+  const { theme, setTheme } = useTheme();
+  return (
+    <div
+      className={`kn-theme-toggle kn-theme-toggle--${variant}`}
+      role="radiogroup"
+      aria-label="Theme"
+    >
+      {THEME_OPTIONS.map((opt) => {
+        const active = theme === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            className={`kn-theme-opt ${active ? "kn-theme-opt--active" : ""}`}
+            onClick={() => setTheme(opt.value)}
+            title={`${opt.label} theme`}
+          >
+            <span className="kn-theme-opt-glyph" aria-hidden="true">
+              {opt.glyph}
+            </span>
+            {variant === "full" && <span>{opt.label}</span>}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -537,6 +582,7 @@ function App() {
           onOpenDeal={handleOpenDeal}
           onGenerateTemplate={handleGenerateTemplate}
           usageSlot={usage ? <UsageGauge usage={usage} variant="compact" /> : null}
+          themeSlot={<ThemeToggle variant="compact" />}
         />
 
         <main className="kn-main">
@@ -854,6 +900,15 @@ function Settings({
         ← Back
       </button>
       <h2 className="kn-settings-title">Settings</h2>
+
+      <section className="kn-section">
+        <h3 className="kn-section-title">Appearance</h3>
+        <p className="kn-section-body">
+          Switch between the dark <strong>Ink</strong> theme and the light{" "}
+          <strong>Paper</strong> theme. Your choice is remembered on this Mac.
+        </p>
+        <ThemeToggle variant="full" />
+      </section>
 
       <section className="kn-section">
         <h3 className="kn-section-title">LLM Connection</h3>
