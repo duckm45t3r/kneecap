@@ -188,8 +188,64 @@ ecosystem trust, and a desktop client is harder to protect against bulk capture
 than the web. So: build the **features** under controlled access; do **not** ship
 the full database.
 
-**On start:** produce a phased design first (which features migrate first /
-controlled-access design / verdict-presentation tiers).
+### Phased design (designed + adversarially reviewed 2026-06-26; PLAN ONLY)
+
+**Key finding — it's mostly plumbing two patterns VHS already has:**
+- The access-scope predicate ("has this user been shown this company") already
+  lives at `app/(user)/companies/[fileNumber]/page.tsx:101-113`. W6's filter is a
+  paginated, per-user generalization: **batches the user has a `UserDecision` in ∪
+  the active batch**.
+- The hosted-subscriber gate is the exact `/api/kneecap/generate:129-157` block
+  (`authenticateBearer` → DB re-read role/approval/subscription → `evaluateGate` →
+  require `isAdmin || (isApproved && isLive)` → else **403**). Factor into a shared
+  `requireHostedSubscriber()`. `isLive` (ACTIVE/TRIAL) = **stricter** than the web
+  read gate — the desktop greying-out is cosmetic; this 403 is the real wall.
+- `StartupSubmission` / `Company.pitchDeckUrl` are **DEAD tables** (zero live code)
+  → "pull deck from VHS" is dormant plumbing; **P1 IC source = user-upload** (the
+  existing presigned flow), server-attach later when a deck store actually exists.
+
+**Phasing:**
+- **P1 (MVP)** — Cockpit view: browse my-companies (read-only, paginated) +
+  "Generate IC on this company" → reuses the existing hosted/presigned IC pipeline;
+  result lands as a normal **local Report**. Reuses ~90% of existing code; writes
+  nothing back to VHS. Endpoints under `app/api/kneecap/cockpit/*`.
+- **P2** — voting (Yeah/Maybe/Nope): a device-token twin of `/api/decisions` →
+  same `UserDecision` table → **automatic two-way web↔desktop sync** + per-region
+  yeah-limits reused. (Write to prod data → own deploy.)
+- **P3** — pipeline: read-only mirror of `/pipeline` + contact-status timeline.
+  DealRoom (SPV/NDA) stays on web, out of scope.
+
+**Security must-fix before P1 deploy** (adversarial review verdict = SOUND, 3 tightens):
+1. Shared `assertCompanyInScope(userId, companyId)` called **unconditionally** on
+   EVERY endpoint taking a client `companyId`/`companyRef` ([id], ic-source, vote,
+   the `/generate companyRef` branch). No "in-practice/defense-in-depth" substitutes.
+2. Verdict box = **hardcoded whitelist of softened fields only**. NEVER push
+   `aiAnalysisRaw` / `aiVerdict(Reason)` / `spotCheckResult` / `aiVerdictAt` /
+   `claimedByUserId`. Soften the enum server-side (APPROVED→"Positive internal
+   lean" etc.); the raw enum never crosses the wire.
+3. Company data = **React state only** (ephemeral). No cockpit payload through the
+   `deal_*`/`report_*`/`source_*` SQLite persistence; no new company table. (Caveat:
+   seed company text legitimately persists INSIDE a generated IC memo — the user's
+   own work product, like a Quick Memo today.)
+
+**Residual risks to accept knowingly:**
+- 🔑 **A subscriber can script-pull their ENTIRE scoped dealflow in <1 min**
+  (~20 companies/wk × ~52 wk ≈ 1000 → ~20 page-fetches, under the 60/60s limit).
+  Pagination/rate-limit do NOT stop this; scope bounds it to their entitled set.
+  Real control = **detection (log/alert on bulk page-walks) + ToS, not a wall.** #1
+  IP residual (the website has the same exposure today).
+- `recommendationReason`/`riskAssessment` (LLM free text) ship to the client as on
+  the web; "internal opinion" framing may make a VC read them as official.
+- Narrow scope hides past batches the user never voted on (fails safe).
+
+**Open questions (decide at build time):** ① access scope literal (rec) vs website
+cohort ② entitlement isLive strict (rec, PAST_DUE→403) vs allow PAST_DUE read
+③ verdict depth: omit `aiVerdictReason` in P1 (rec) vs trimmed ④ ship Path-A
+server-attach as dormant plumbing (no decks exist yet)? ⑤ merge US+TW into one
+cockpit list (rec) vs mirror the split ⑥ P3 read-only vs desktop-local private notes.
+
+**On start:** implement the 3 must-fixes + a focused `/security-review` on the scope
+predicate per phase before each deploy.
 
 ## Branch map (as of this work)
 
