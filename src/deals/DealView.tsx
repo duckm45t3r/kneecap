@@ -38,6 +38,21 @@ const PROVIDER_LABELS: Record<string, string> = {
   vhs: "VHS-hosted",
 };
 
+// Providers that read a PDF natively (vision/document-capable). Mirrors App's
+// NATIVE_PDF_PROVIDERS and the Rust provider_supports_native_pdf split — kept
+// local to avoid coupling this view back to App.tsx. Anything outside this set
+// is text-only (nvidia / local): a PDF is reduced to extracted text.
+const NATIVE_PDF_PROVIDERS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "openai",
+  "gemini",
+  "vhs",
+]);
+
+function isTextOnlyProvider(provider: string): boolean {
+  return !NATIVE_PDF_PROVIDERS.has(provider);
+}
+
 const KIND_EMOJI: Record<SourceKind, string> = {
   pdf: "📄",
   text: "✎",
@@ -214,6 +229,7 @@ export function DealView({
         <NewVersionModal
           deal={detail.deal}
           sourceCount={detail.sources.length}
+          hasPdfSource={detail.sources.some((s) => s.kind === "pdf")}
           nextSeq={(detail.versions[0]?.seq ?? 0) + 1}
           availableProviders={availableProviders}
           templateOptions={templateOptions}
@@ -855,6 +871,7 @@ function VersionViewer({
 function NewVersionModal({
   deal,
   sourceCount,
+  hasPdfSource,
   nextSeq,
   availableProviders,
   templateOptions,
@@ -864,6 +881,8 @@ function NewVersionModal({
 }: {
   deal: { id: string };
   sourceCount: number;
+  // Whether any of the deal's sources is a PDF — drives the text-only advisory.
+  hasPdfSource: boolean;
   nextSeq: number;
   availableProviders: string[];
   templateOptions: { id: string; name: string }[];
@@ -967,6 +986,14 @@ function NewVersionModal({
             </select>
           </label>
         </div>
+
+        {hasPdfSource && isTextOnlyProvider(provider) && (
+          <div className="kn-advisory" role="status">
+            ⚠️ This model reads text only — image/scanned PDFs (most pitch decks)
+            extract almost nothing. Use a vision provider (VHS-hosted, Claude, or
+            Gemini) to read decks.
+          </div>
+        )}
 
         <label className="kn-label kn-label--grow">
           Note (shown in the version list)

@@ -200,7 +200,7 @@ struct ConfiguredMarker {
 }
 
 /// Path to `{app_data_dir}/configured.json`, creating the parent dir on first
-/// use. Mirrors `reports_dir`'s use of `app.path().app_data_dir()`.
+/// use. Like `db_path`, resolves under `app.path().app_data_dir()`.
 fn configured_marker_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let base = app
         .path()
@@ -3016,112 +3016,18 @@ fn strip_json_fence(s: &str) -> String {
     t.to_string()
 }
 
-// ─── Report persistence (P1 — Tauri filesystem) ──────────────────────
+// ─── Report persistence — REMOVED (superseded by deals/SQLite) ───────
 //
-// Saved reports live as opaque JSON files under
-// `{app_data_dir}/reports/<id>.json`. The frontend owns the schema
-// (SavedReport in src/reports/reportStore.ts); the backend treats each file
-// as an opaque string so adding a field never touches Rust. We use
-// `app.path().app_data_dir()` + std::fs rather than tauri-plugin-fs — the
-// `core:path:default` permission is already granted and this keeps us off the
-// fs-plugin ACL entirely, matching the hand-rolled #[tauri::command] posture
-// of the rest of this file.
-
-/// Sanitise a caller-supplied report id before joining it onto a filesystem
-/// path. A crafted id like `../../foo` or `/etc/passwd` must NOT escape the
-/// reports dir, so we hard-restrict to `[A-Za-z0-9_-]` and reject anything
-/// empty or over-long. This is the single chokepoint every read / write /
-/// delete passes through — defence-in-depth against path traversal.
-fn sanitize_report_id(id: &str) -> Result<String, String> {
-    let trimmed = id.trim();
-    if trimmed.is_empty() {
-        return Err("Empty report id".to_string());
-    }
-    if trimmed.len() > 128 {
-        return Err("Report id too long".to_string());
-    }
-    if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(format!(
-            "Invalid report id: {} (only A-Z a-z 0-9 _ - allowed)",
-            trimmed
-        ));
-    }
-    Ok(trimmed.to_string())
-}
-
-/// Resolve `{app_data_dir}/reports/`, creating it on first use. app_data_dir
-/// resolves to `data_dir/${bundle_identifier}` (capital.vhs.kneecap per
-/// tauri.conf.json), so reports stay scoped to this app.
-fn reports_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let base = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Cannot resolve app data dir: {}", e))?;
-    let dir = base.join("reports");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Cannot create reports dir: {}", e))?;
-    Ok(dir)
-}
-
-#[tauri::command]
-fn save_report(app: tauri::AppHandle, id: String, json: String) -> Result<(), String> {
-    let safe_id = sanitize_report_id(&id)?;
-    let dir = reports_dir(&app)?;
-    let path = dir.join(format!("{}.json", safe_id));
-    std::fs::write(&path, json.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
-    Ok(())
-}
-
-#[tauri::command]
-fn list_reports(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let dir = reports_dir(&app)?;
-    let mut out = Vec::new();
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        // Dir vanished between create + read — treat as empty, not an error.
-        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(format!("Cannot read reports dir: {}", e)),
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("json") {
-            continue;
-        }
-        // Skip unreadable / partially-written files rather than failing the
-        // whole list — one corrupt file shouldn't blank the sidebar.
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            out.push(contents);
-        }
-    }
-    Ok(out)
-}
-
-#[tauri::command]
-fn load_report(app: tauri::AppHandle, id: String) -> Result<String, String> {
-    let safe_id = sanitize_report_id(&id)?;
-    let dir = reports_dir(&app)?;
-    let path = dir.join(format!("{}.json", safe_id));
-    std::fs::read_to_string(&path).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => "Report not found".to_string(),
-        _ => format!("Read failed: {}", e),
-    })
-}
-
-#[tauri::command]
-fn delete_report(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let safe_id = sanitize_report_id(&id)?;
-    let dir = reports_dir(&app)?;
-    let path = dir.join(format!("{}.json", safe_id));
-    // Mirror delete_api_key: a missing file is a no-op success, not an error.
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("Delete failed: {}", e)),
-    }
-}
+// The old flat-file report store lived here: save_report / list_reports /
+// load_report / delete_report wrote opaque JSON to {app_data_dir}/reports/
+// <id>.json (plus the sanitize_report_id + reports_dir helpers). Saved reports
+// became DEALS with version history in SQLite, so the frontend stopped calling
+// these and they were dead code. They are gone.
+//
+// NOTE: the one-time legacy import (run_legacy_migration, below) still reads the
+// old reports/*.json files DIRECTLY via std::fs to fold them into deals on first
+// open — it never used these commands and owns its own deserialiser, so it is
+// unaffected by their removal.
 
 // ─── Report export (PDF / DOCX) ──────────────────────────────────────
 //
@@ -3165,11 +3071,14 @@ fn save_export_file(path: String, base64_data: String) -> Result<(), String> {
 // threading a Mutex<Connection> through Tauri state; FOREIGN KEYS is a per-
 // connection PRAGMA so every helper turns it on right after open.
 //
-// Schema (3 tables, all CREATE TABLE IF NOT EXISTS on first open):
+// Schema (all CREATE TABLE IF NOT EXISTS on first open):
 //   deal(id, name, status, created_at, updated_at)
 //   source(id, deal_id→deal CASCADE, kind, name, content, added_at)
 //   version(id, deal_id→deal CASCADE, seq, kind, template_id, provider,
 //           content, note, source_ids /*JSON array*/, created_at)
+//   meta(key, value)  — migration flags
+//   template(id, name, kind, data /*full Template JSON*/, created_at, updated_at)
+//           — user-forked report templates (Phase D; starters stay in code)
 //
 // The generation path reuses the Phase-1 native-PDF architecture verbatim
 // (resolve_source / provider_supports_native_pdf / build_memo_prompt /
@@ -3286,6 +3195,21 @@ pub struct DealDetail {
     pub sources: Vec<DealSource>,
 }
 
+/// One user-forked report template (Phase D). `data` is the full kneecap
+/// Template serialised as JSON — the frontend owns that schema (Template in
+/// src/templates/types.ts); the backend treats it as an opaque string, so
+/// adding a Template field never touches Rust. `id` / `name` / `kind` are
+/// mirrored out of the JSON into their own columns for listing without parsing.
+#[derive(Serialize, Clone)]
+pub struct TemplateRow {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub data: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ── Connection + schema ─────────────────────────────────────────────
 
 /// Path to `{app_data_dir}/kneecap.db`, creating the parent dir on first use —
@@ -3352,6 +3276,14 @@ fn init_schema(conn: &rusqlite::Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS meta (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS template (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            kind        TEXT NOT NULL DEFAULT '',
+            data        TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
         );",
     )
     .map_err(|e| format!("Schema init failed: {}", e))
@@ -3953,6 +3885,108 @@ fn deal_delete_version(app: tauri::AppHandle, version_id: String) -> Result<(), 
     Ok(())
 }
 
+// ── Custom-template CRUD (Phase D — user-forked templates in SQLite) ─
+//
+// Starters (STARTER_TEMPLATES in src/templates/starters.ts) stay in code and are
+// NOT persisted; only forked/learned custom templates land here. The frontend
+// hands us the full Template JSON as an opaque `data` string and we mirror its
+// id / name / kind into columns so list never has to parse the body.
+
+fn map_template(row: &rusqlite::Row) -> rusqlite::Result<TemplateRow> {
+    Ok(TemplateRow {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        kind: row.get("kind")?,
+        data: row.get("data")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+/// List all custom templates, newest-updated first.
+#[tauri::command]
+fn template_list(app: tauri::AppHandle) -> Result<Vec<TemplateRow>, String> {
+    let conn = open_db(&app)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, kind, data, created_at, updated_at
+             FROM template ORDER BY updated_at DESC, id DESC",
+        )
+        .map_err(|e| format!("Prepare template_list failed: {}", e))?;
+    let rows = stmt
+        .query_map([], map_template)
+        .map_err(|e| format!("Query template_list failed: {}", e))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("Read template row failed: {}", e))?);
+    }
+    Ok(out)
+}
+
+/// Upsert a custom template by id. The id is supplied by the frontend (it's part
+/// of the Template the designer/forker already minted), so this is a create OR
+/// overwrite: an existing row keeps its created_at and bumps updated_at. `data`
+/// is the full Template JSON, stored opaque.
+#[tauri::command]
+fn template_save(
+    app: tauri::AppHandle,
+    id: String,
+    name: String,
+    kind: String,
+    data: String,
+) -> Result<TemplateRow, String> {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("Template id is required".to_string());
+    }
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Template name is required".to_string());
+    }
+    if data.trim().is_empty() {
+        return Err("Template data is empty".to_string());
+    }
+    let conn = open_db(&app)?;
+    let now = now_iso8601();
+    // Keep the original created_at when overwriting; only first insert stamps it.
+    let prior_created: Option<String> = conn
+        .query_row(
+            "SELECT created_at FROM template WHERE id = ?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .ok();
+    let created_at = prior_created.unwrap_or_else(|| now.clone());
+    conn.execute(
+        "INSERT INTO template (id, name, kind, data, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+            name       = excluded.name,
+            kind       = excluded.kind,
+            data       = excluded.data,
+            updated_at = excluded.updated_at",
+        rusqlite::params![id, name, kind, data, created_at, now],
+    )
+    .map_err(|e| format!("Save template failed: {}", e))?;
+    Ok(TemplateRow {
+        id,
+        name,
+        kind,
+        data,
+        created_at,
+        updated_at: now,
+    })
+}
+
+/// Delete a custom template by id. A missing row is a no-op success.
+#[tauri::command]
+fn template_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    conn.execute("DELETE FROM template WHERE id = ?1", [&id])
+        .map_err(|e| format!("Delete template failed: {}", e))?;
+    Ok(())
+}
+
 // ── THE KEY COMMAND — multi-source version generation ───────────────
 //
 // Build a NEW version from ALL the deal's accumulated sources (full re-generate,
@@ -4546,10 +4580,6 @@ pub fn run() {
             gather_source,
             generate_block,
             infer_templates,
-            save_report,
-            list_reports,
-            load_report,
-            delete_report,
             save_export_file,
             // Deals + version history (W4/W5 — SQLite)
             deal_create,
@@ -4563,7 +4593,11 @@ pub fn run() {
             version_create,
             version_update_content,
             deal_delete_version,
-            deal_generate_version
+            deal_generate_version,
+            // Custom report templates (Phase D — SQLite)
+            template_list,
+            template_save,
+            template_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -13,6 +13,7 @@ import {
   deleteCustomTemplate,
   getFirmLogo,
   templateFromInferred,
+  hydrateCustomTemplates,
 } from "./templates/templateStore";
 import { type Template, MAX_TEMPLATE_BLOCKS } from "./templates/types";
 import { Sidebar, type SidebarNav } from "./Sidebar";
@@ -96,6 +97,22 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   local: "Local (Ollama)",
   vhs: "VHS-hosted",
 };
+
+// Providers that read a PDF NATIVELY (vision/document-capable). Mirrors the Rust
+// provider_supports_native_pdf split — keep the two in sync. Everything NOT in
+// this set is text-only: a PDF is reduced to extracted text, so an image/scanned
+// deck yields almost nothing.
+const NATIVE_PDF_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>([
+  "anthropic",
+  "openai",
+  "gemini",
+  "vhs",
+]);
+
+/** True when the provider can only read text (nvidia / local) — no native PDF. */
+export function isTextOnlyProvider(provider: string): boolean {
+  return !NATIVE_PDF_PROVIDERS.has(provider as Provider);
+}
 
 // Providers that take a bring-your-own API key (matches the Rust
 // SUPPORTED_PROVIDERS). "local" and "vhs" are configured differently.
@@ -326,10 +343,10 @@ function App() {
   const [vhsLinked, setVhsLinked] = useState(false);
 
   // Deals + templates lifted to the App root so the persistent sidebar reflects
-  // them everywhere, mirroring the existing refreshProviders pattern. Deals live
-  // in SQLite (W4/W5); templates still come from templateStore (localStorage).
-  // Legacy flat reports were migrated to deals by the Rust layer, so they show
-  // up in this list automatically on first load.
+  // them everywhere, mirroring the existing refreshProviders pattern. Both now
+  // live in SQLite (deals: W4/W5; custom templates: Phase D, hydrated into an
+  // in-memory cache at mount). Legacy flat reports were migrated to deals by the
+  // Rust layer, so they show up in this list automatically on first load.
   const [deals, setDeals] = useState<DealListRow[]>([]);
   const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
   // The deal currently open in the deal view.
@@ -404,7 +421,15 @@ function App() {
   useEffect(() => {
     refreshProviders();
     refreshDeals();
-  }, [refreshProviders, refreshDeals]);
+    // Custom templates now live in SQLite (Phase D). Hydrate the in-memory cache
+    // once (also runs the one-time localStorage → DB migration), then push the
+    // loaded templates into state so the sidebar + gallery reflect them. The
+    // cache is empty until this resolves, so the initial render shows starters
+    // only and this fills in the custom ones a tick later.
+    hydrateCustomTemplates()
+      .then(() => refreshTemplates())
+      .catch((e) => console.error("hydrateCustomTemplates failed", e));
+  }, [refreshProviders, refreshDeals, refreshTemplates]);
 
   // Try to load the usage gauge on mount and whenever link state changes.
   // vhs_usage itself decides: if a token is present it returns data (gauge
@@ -1051,7 +1076,7 @@ function FormatLearningOption({
         try {
           const parsed = JSON.parse(r.template_json) as unknown;
           const tmpl = templateFromInferred(parsed, r.name);
-          saveCustomTemplate(tmpl);
+          await saveCustomTemplate(tmpl);
           savedCount += 1;
           collected.push({
             name: r.name,
@@ -1810,6 +1835,8 @@ function QuickMemo({
         setPdfFile={setPdfFile}
       />
 
+      <TextOnlyPdfWarning show={mode === "pdf" && isTextOnlyProvider(provider)} />
+
       <label className="kn-label kn-label--grow">
         Note for the reader (optional)
         <input
@@ -2083,6 +2110,8 @@ function IcReport({
         setPdfFile={setPdfFile}
       />
 
+      <TextOnlyPdfWarning show={mode === "pdf" && isTextOnlyProvider(provider)} />
+
       <div className="kn-stepper">
         {activeSections.map((s, idx) => {
           const isDone = !!sections[s];
@@ -2215,6 +2244,21 @@ function ProviderPicker({
         })}
       </select>
     </label>
+  );
+}
+
+// Non-blocking advisory shown when a text-only provider (nvidia / local) is
+// paired with a PDF source. Image/scanned decks extract almost nothing through
+// the text path, so we nudge the user toward a vision provider. Render it only
+// when `show` is true; styled with the shared kn-advisory class.
+function TextOnlyPdfWarning({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <div className="kn-advisory" role="status">
+      ⚠️ This model reads text only — image/scanned PDFs (most pitch decks)
+      extract almost nothing. Use a vision provider (VHS-hosted, Claude, or
+      Gemini) to read decks.
+    </div>
   );
 }
 
@@ -2490,6 +2534,12 @@ function TemplateGallery({
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
   const firmLogo = getFirmLogo();
 
+  // Re-read on mount in case the custom-template cache hydrated (Phase D, async)
+  // after this gallery's initial getAllTemplates() snapshot was taken.
+  useEffect(() => {
+    setTemplates(getAllTemplates());
+  }, []);
+
   // Sidebar deep-link: open straight into the generate flow for the requested
   // template, then clear the pending id so a later browse doesn't re-trigger.
   useEffect(() => {
@@ -2504,11 +2554,15 @@ function TemplateGallery({
     return (
       <TemplateDesigner
         initial={editDraft}
-        onSave={(t) => {
-          saveCustomTemplate(t);
-          refresh();
-          setSelectedId(t.id);
-          showToast("Template saved");
+        onSave={async (t) => {
+          try {
+            await saveCustomTemplate(t);
+            refresh();
+            setSelectedId(t.id);
+            showToast("Template saved");
+          } catch (e) {
+            showToast(`Could not save template: ${String(e)}`);
+          }
         }}
         onClose={() => {
           setMode("browse");
@@ -2537,14 +2591,18 @@ function TemplateGallery({
     setMode("edit");
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!selected) return;
-    deleteCustomTemplate(selected.id);
-    const next = getAllTemplates();
-    setTemplates(next);
-    setSelectedId(next[0]?.id ?? "");
-    refreshTemplates?.();
-    showToast("Template deleted");
+    try {
+      await deleteCustomTemplate(selected.id);
+      const next = getAllTemplates();
+      setTemplates(next);
+      setSelectedId(next[0]?.id ?? "");
+      refreshTemplates?.();
+      showToast("Template deleted");
+    } catch (e) {
+      showToast(`Could not delete template: ${String(e)}`);
+    }
   };
 
   return (
@@ -2860,6 +2918,8 @@ function GenerateFromTemplate({
         pdfFile={pdfFile}
         setPdfFile={setPdfFile}
       />
+
+      <TextOnlyPdfWarning show={mode === "pdf" && isTextOnlyProvider(provider)} />
 
       <label className="kn-label kn-label--grow">
         Note for the reader (optional)

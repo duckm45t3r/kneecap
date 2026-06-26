@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Block,
   BlockAccent,
@@ -13,13 +14,50 @@ import type {
 import { MAX_TEMPLATE_BLOCKS } from "./types";
 import { STARTER_TEMPLATES } from "./starters";
 
-// User-forked templates live in localStorage (interim store — moves to the
-// Tauri filesystem when report/template persistence lands in the structural
-// rebuild). Starters are read-only; editing one forks a custom copy.
+// ─── Custom templates — SQLite (Phase D) ──────────────────────────────
+//
+// User-forked / learned templates persist in kneecap.db via hand-rolled
+// #[tauri::command] fns (template_list / template_save / template_delete),
+// mirroring the deals store. Starters (STARTER_TEMPLATES) stay in code and are
+// never persisted; editing one forks a custom copy.
+//
+// SQLite reads are async, but getAllTemplates / getTemplate are called
+// synchronously all over (useState initialisers, the PDF/DOCX export path). So
+// we keep an in-memory CACHE of the custom templates, hydrated once at app load
+// via hydrateCustomTemplates(); the sync getters read the cache, and writes
+// update the cache immediately AND fire the async DB command. The cache is the
+// single source of truth the UI renders from.
+
+// What template_list / template_save return per row (snake_case from Rust).
+type TemplateRow = {
+  id: string;
+  name: string;
+  kind: string;
+  data: string; // the full Template JSON
+  created_at: string;
+  updated_at: string;
+};
+
+// Newest-updated first, matching template_list's ORDER BY.
+let customCache: Template[] = [];
+
+/** Parse one row's `data` JSON into a Template; null if it's unparseable. */
+function rowToTemplate(row: TemplateRow): Template | null {
+  try {
+    const t = JSON.parse(row.data) as Template;
+    // Trust the row id over whatever's embedded (they're written together, but
+    // the column is canonical for delete/overwrite).
+    return t && typeof t === "object" ? { ...t, id: row.id } : null;
+  } catch {
+    return null;
+  }
+}
 
 const LS_KEY = "kneecap_custom_templates";
+const MIGRATED_FLAG = "templates_migrated";
 
-export function listCustomTemplates(): Template[] {
+/** Read any legacy localStorage custom templates (pre-Phase-D store). */
+function readLegacyLocalTemplates(): Template[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
   try {
     const raw = window.localStorage.getItem(LS_KEY);
@@ -31,13 +69,57 @@ export function listCustomTemplates(): Template[] {
   }
 }
 
-function writeCustom(list: Template[]): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  window.localStorage.setItem(LS_KEY, JSON.stringify(list));
+/**
+ * Load custom templates from SQLite into the cache. Call once at app start
+ * (before the first render that reads templates) and await it. Also runs the
+ * one-time localStorage → SQLite migration: if the DB has no custom templates
+ * yet AND localStorage holds some AND we haven't migrated, push each into the
+ * DB, then set a flag so it never runs again. The localStorage copy is left in
+ * place as a safety net.
+ */
+export async function hydrateCustomTemplates(): Promise<void> {
+  let rows = (await invoke<TemplateRow[]>("template_list")) ?? [];
+
+  // One-time migration of the legacy localStorage store.
+  const alreadyMigrated =
+    typeof window !== "undefined" &&
+    !!window.localStorage &&
+    window.localStorage.getItem(MIGRATED_FLAG) === "1";
+  if (rows.length === 0 && !alreadyMigrated) {
+    const legacy = readLegacyLocalTemplates();
+    if (legacy.length > 0) {
+      for (const t of legacy) {
+        try {
+          await invoke<TemplateRow>("template_save", {
+            id: t.id,
+            name: t.name,
+            kind: t.kind,
+            data: JSON.stringify(t),
+          });
+        } catch {
+          /* skip a single bad row; don't sink the whole migration */
+        }
+      }
+      // Re-read so the cache reflects exactly what's now in the DB.
+      rows = (await invoke<TemplateRow[]>("template_list")) ?? [];
+    }
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.setItem(MIGRATED_FLAG, "1");
+    }
+  }
+
+  customCache = rows
+    .map(rowToTemplate)
+    .filter((t): t is Template => t !== null);
+}
+
+/** The custom templates currently in the cache (sync). */
+export function listCustomTemplates(): Template[] {
+  return customCache;
 }
 
 export function getAllTemplates(): Template[] {
-  return [...STARTER_TEMPLATES, ...listCustomTemplates()];
+  return [...STARTER_TEMPLATES, ...customCache];
 }
 
 export function getTemplate(id: string): Template | undefined {
@@ -48,16 +130,27 @@ export function isStarter(id: string): boolean {
   return STARTER_TEMPLATES.some((t) => t.id === id);
 }
 
-export function saveCustomTemplate(t: Template): void {
-  const list = listCustomTemplates();
-  const idx = list.findIndex((x) => x.id === t.id);
-  if (idx >= 0) list[idx] = t;
-  else list.push(t);
-  writeCustom(list);
+/**
+ * Create or overwrite a custom template. Updates the in-memory cache first (so
+ * the next sync read is correct) then persists to SQLite. Awaitable so callers
+ * can refresh UI state once the write lands.
+ */
+export async function saveCustomTemplate(t: Template): Promise<void> {
+  const idx = customCache.findIndex((x) => x.id === t.id);
+  if (idx >= 0) customCache = [t, ...customCache.filter((x) => x.id !== t.id)];
+  else customCache = [t, ...customCache];
+  await invoke<TemplateRow>("template_save", {
+    id: t.id,
+    name: t.name,
+    kind: t.kind,
+    data: JSON.stringify(t),
+  });
 }
 
-export function deleteCustomTemplate(id: string): void {
-  writeCustom(listCustomTemplates().filter((t) => t.id !== id));
+/** Delete a custom template. Updates the cache then persists the delete. */
+export async function deleteCustomTemplate(id: string): Promise<void> {
+  customCache = customCache.filter((t) => t.id !== id);
+  await invoke("template_delete", { id });
 }
 
 // ─── Firm logo (app-level, shared across templates) ───────────────────

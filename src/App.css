@@ -904,6 +904,19 @@ a:hover {
   margin: 0 0 18px;
 }
 
+/* ── Advisory banner (text-only provider + PDF) ───────────────────── */
+/* Amber, non-blocking — distinct from the crimson hard disclaimer. */
+.kn-advisory {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--vhs-gold, #b8860b);
+  background: rgba(196, 152, 58, 0.09);
+  border: 1px solid rgba(196, 152, 58, 0.35);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 12px 0 0;
+}
+
 /* ── Source picker (URL vs paste tab) ──────────────────────────────── */
 
 .kn-source {
