@@ -25,19 +25,35 @@ const NVIDIA_BASE_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completi
 // so a deprecated / paused / renamed model never silently 404s the provider.
 const NVIDIA_MODELS_URL: &str = "https://integrate.api.nvidia.com/v1/models";
 
-// LAST-RESORT default only. The live model is normally chosen by
-// resolve_nvidia_model from the fetched catalogue (see fetch_nvidia_models /
-// select_best_nvidia_model). We fall back to this hardcoded id only when the
-// catalogue fetch fails AND there is no cached choice on disk — i.e. never
-// hard-fail generation just because the model-list request didn't come back.
-// (This is the exact id that 404'd once it was retired upstream, kept solely
-// as a better-than-nothing seed; the self-heal path will replace it.)
-const NVIDIA_FALLBACK_MODEL: &str = "nvidia/llama-3.3-nemotron-super-49b-v1";
+// HARDCODED FALLBACK RANKED LIST — known-alive on Wei's Nvidia account (live
+// probed 2026-06). Used ONLY when the catalogue fetch fails: we probe these in
+// order and use the first that answers. These are the deployed "super"/"ultra"
+// reasoning-tier ids — the older "*-instruct"-named nemotrons (70b/51b/340b)
+// are LISTED on the account but their inference function is NOT deployed → they
+// return HTTP 404 "Function ... Not Found" even though /v1/models advertises
+// them. Names don't reveal deploy status, so we never trust a listed id blind —
+// we PROBE it (see probe_nvidia_model / nvidia_ensure_model).
+const NVIDIA_FALLBACK_MODELS: &[&str] = &[
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+];
 
-// Re-fetch the catalogue when the cached choice is older than this. "At least
-// weekly" per the requirement — a retired model is detected within 7 days even
-// if no generation call happens to trip the self-heal path first.
+// Single-id last-resort seed = the top of the ranked fallback list. Used where
+// one id is needed (e.g. "all candidates probed Dead → return the top fallback
+// and let real generation surface the error").
+const NVIDIA_FALLBACK_MODEL: &str = NVIDIA_FALLBACK_MODELS[0];
+
+// Re-validate the cached choice when it's older than this. "At least weekly" per
+// the requirement — a retired model is detected within 7 days even if no
+// generation call happens to trip the self-heal path first. The cache now stores
+// `validated_at` (the time we PROVED the model alive by probing), not merely
+// `fetched_at`.
 const NVIDIA_MODEL_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+
+// Cap how many ranked candidates we probe before giving up (each probe is a
+// tiny 1-token chat call). Bounds cost when many listed ids are dead.
+const NVIDIA_PROBE_MAX_CANDIDATES: usize = 6;
 
 // ─── SSRF defence (4 layers) ─────────────────────────────────────────
 //
@@ -1156,13 +1172,17 @@ struct NvidiaModelList {
     data: Option<Vec<NvidiaModelEntry>>,
 }
 
-/// On-disk cache at `{app_data_dir}/nvidia_model.json`. `fetched_at` is an
-/// ISO-8601 UTC string from now_iso8601() (matches the rest of the codebase);
-/// we parse it back to epoch seconds for the TTL check.
+/// On-disk cache at `{app_data_dir}/nvidia_model.json`. `validated_at` is an
+/// ISO-8601 UTC string from now_iso8601() (matches the rest of the codebase) —
+/// the moment we PROVED this model alive by probing it; we parse it back to
+/// epoch seconds for the TTL check. (Old shape used `fetched_at`; we accept that
+/// field name too via serde alias so a pre-upgrade cache migrates silently
+/// instead of being discarded.)
 #[derive(Serialize, Deserialize)]
 struct NvidiaModelCache {
     model: String,
-    fetched_at: String,
+    #[serde(alias = "fetched_at")]
+    validated_at: String,
 }
 
 /// GET the OpenAI-compatible model catalogue. Returns the list of model ids.
@@ -1196,88 +1216,129 @@ async fn fetch_nvidia_models(key: &str) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
+/// Extract a coarse "version rank" from an id for tie-breaking and the
+/// higher-version bonus. Higher = newer. We only need a relative ordering, not a
+/// real semver parse: "v1.5"/"-v2"/"v2" must outrank "v1".
+fn nvidia_version_rank(id_lower: &str) -> i32 {
+    if id_lower.contains("v2") || id_lower.contains("-v2") {
+        3
+    } else if id_lower.contains("v1.5") {
+        2
+    } else if id_lower.contains("v1") {
+        1
+    } else {
+        0
+    }
+}
+
 /// Score a single model id for memo / IC-report generation. Higher = better.
-/// `i32::MIN` (returned as `None` by the caller's filter) means "never pick
-/// this". The scoring is additive so it adapts as the catalogue changes — we
+/// `None` means DISQUALIFIED — never route memos to it (dropped from the ranked
+/// list). The scoring is additive so it adapts as the catalogue changes — we
 /// never hardcode one id, we rank by the *properties* we want.
 ///
+/// RE-WEIGHTED (2026-06): the deployed reasoning tier on Nvidia is the
+/// "super"/"ultra" line, NOT the older "*-instruct"-named nemotrons (70b/51b/
+/// 340b) which are listed-but-undeployed (404). So "super"/"ultra" now outrank
+/// "instruct", and a higher version tag is a real signal. Scoring only RANKS;
+/// the actual deploy status is settled by live probing (probe_nvidia_model).
+///
 /// RANKING (high → low), all on the lowercased id:
-///   • DISQUALIFY outright (return None): anything we must not route memos to —
-///     "embed", "rerank", "reward", "guard", "vl"/vision, "code", or a
-///     non-text family. These exist in the catalogue but would break or
-///     degrade prose generation.
-///   • REQUIRE "nemotron": non-nemotron ids score below every nemotron id.
-///     (We still let them through with a low score as an absolute last resort
-///     if somehow no nemotron exists, but the resolver prefers a real
-///     nemotron — see select_best_nvidia_model.)
-///   • PREFER an instruct/chat-tuned variant ("instruct" or "chat") — these are
-///     the ones tuned for following a memo prompt vs. a base/reasoning dump.
-///   • PREFER a strong-but-practical size tier: "super" (the sweet spot:
-///     49b-class, strong yet hostable) > an explicit "70b" / "llama-3.3" /
-///     "llama-3.1" instruct > unspecified.
-///   • PENALISE the tiny tiers — "nano" / "mini" / "micro" — they're cheaper
-///     but weaker for long-form IC reasoning, so they sink below the mid tiers
-///     without being fully disqualified.
+///   • DISQUALIFY outright (return None): embed/rerank/reward/guard/nemoguard/
+///     safety/vision/-vl/vl-/nemoretriever/parse/code/ocr/clip/embedqa/
+///     content-safety/translate — these exist in the catalogue but would break
+///     or degrade prose generation.
+///   • REQUIRE "nemotron": a non-nemotron id is dropped (return None).
+///   • +450 "super" / +400 "ultra" — the deployed reasoning tier.
+///   • +300 "instruct" — older naming, kept as a positive signal but below the
+///     super/ultra line.
+///   • +120 a higher version tag present (prefer "v1.5"/"-v2"/"v2" over "v1").
+///   • +100 reasonable size (49b/51b/70b/120b).
+///   • −400 the tiny tiers — "nano"/"mini"/"micro".
 fn score_nvidia_model(id_lower: &str) -> Option<i32> {
     // Hard disqualifiers: a substring match here = never route memos to it.
     const DISQUALIFY: &[&str] = &[
-        "embed", "rerank", "reward", "guard", "vision", "-vl", "vl-", "code", "ocr",
+        "embed",
+        "rerank",
+        "reward",
+        "guard",
+        "nemoguard",
+        "safety",
+        "vision",
+        "-vl",
+        "vl-",
+        "nemoretriever",
+        "parse",
+        "code",
+        "ocr",
+        "clip",
+        "embedqa",
+        "content-safety",
+        "translate",
     ];
     if DISQUALIFY.iter().any(|bad| id_lower.contains(bad)) {
         return None;
     }
 
+    // REQUIRE nemotron — anything else is dropped.
+    if !id_lower.contains("nemotron") {
+        return None;
+    }
+
     let mut score = 0i32;
 
-    let is_nemotron = id_lower.contains("nemotron");
-    if is_nemotron {
-        score += 1000;
-    }
-
-    // Instruct / chat tuning — what we actually want for prompt following.
-    if id_lower.contains("instruct") {
-        score += 400;
-    } else if id_lower.contains("chat") {
-        score += 250;
-    }
-
-    // Size / capability tier.
+    // Deployed reasoning tier (super/ultra) > older instruct naming.
     if id_lower.contains("super") {
+        score += 450;
+    }
+    if id_lower.contains("ultra") {
+        score += 400;
+    }
+    if id_lower.contains("instruct") {
         score += 300;
-    } else if id_lower.contains("70b")
-        || id_lower.contains("llama-3.3")
-        || id_lower.contains("llama-3.1")
+    }
+
+    // A higher version tag is a real freshness signal.
+    if nvidia_version_rank(id_lower) >= 2 {
+        score += 120;
+    }
+
+    // Reasonable size for long-form IC reasoning.
+    if id_lower.contains("49b")
+        || id_lower.contains("51b")
+        || id_lower.contains("70b")
+        || id_lower.contains("120b")
     {
-        score += 200;
+        score += 100;
     }
 
     // Penalise the tiny tiers (cheaper, weaker for long IC reasoning).
     if id_lower.contains("nano") || id_lower.contains("mini") || id_lower.contains("micro") {
-        score -= 350;
-    }
-
-    // A bare non-nemotron model with nothing else going for it isn't worth
-    // routing to over the hardcoded fallback — treat as unpickable.
-    if !is_nemotron && score <= 0 {
-        return None;
+        score -= 400;
     }
 
     Some(score)
 }
 
-/// Pick the highest-scoring model id (ranked heuristic, see score_nvidia_model).
-/// Returns None when nothing in the catalogue is suitable — the resolver then
-/// keeps whatever it already had / the fallback. Ties broken by the shorter id
-/// then lexicographically, purely for determinism.
-fn select_best_nvidia_model(ids: &[String]) -> Option<String> {
-    ids.iter()
-        .filter_map(|id| score_nvidia_model(&id.to_lowercase()).map(|s| (s, id)))
-        .max_by(|(sa, ia), (sb, ib)| {
-            sa.cmp(sb)
-                .then_with(|| ib.len().cmp(&ia.len())) // prefer shorter id
-                .then_with(|| ib.as_str().cmp(ia.as_str()))
+/// Rank ALL suitable model ids best→worst (replaces select_best returning one).
+/// Drops every disqualified / non-nemotron id, then sorts DESC by score with
+/// ties broken by higher version then shorter id (determinism). Returns the full
+/// ranked Vec so the caller can PROBE candidates in order until one is alive.
+fn ranked_nvidia_models(ids: &[String]) -> Vec<String> {
+    let mut scored: Vec<(i32, i32, String)> = ids
+        .iter()
+        .filter_map(|id| {
+            let lower = id.to_lowercase();
+            score_nvidia_model(&lower).map(|s| (s, nvidia_version_rank(&lower), id.clone()))
         })
-        .map(|(_, id)| id.clone())
+        .collect();
+    // DESC score, then DESC version, then shorter id, then lexicographic.
+    scored.sort_by(|(sa, va, ia), (sb, vb, ib)| {
+        sb.cmp(sa)
+            .then_with(|| vb.cmp(va))
+            .then_with(|| ia.len().cmp(&ib.len()))
+            .then_with(|| ia.as_str().cmp(ib.as_str()))
+    });
+    scored.into_iter().map(|(_, _, id)| id).collect()
 }
 
 /// Path to `{app_data_dir}/nvidia_model.json` (parent dir created on first
@@ -1300,14 +1361,14 @@ fn read_nvidia_model_cache(app: &tauri::AppHandle) -> Option<NvidiaModelCache> {
     serde_json::from_str(&s).ok()
 }
 
-/// Persist the chosen model + fetch time. Best-effort: a write failure is
-/// swallowed by the caller (we still return the model), since the only cost is
-/// re-fetching next time.
+/// Persist the chosen model + the time we PROVED it alive (validated_at).
+/// Best-effort: a write failure is swallowed by the caller (we still return the
+/// model), since the only cost is re-validating next time.
 fn write_nvidia_model_cache(app: &tauri::AppHandle, model: &str) -> Result<(), String> {
     let path = nvidia_model_cache_path(app)?;
     let cache = NvidiaModelCache {
         model: model.to_string(),
-        fetched_at: now_iso8601(),
+        validated_at: now_iso8601(),
     };
     let json = serde_json::to_string(&cache).map_err(|e| e.to_string())?;
     std::fs::write(&path, json.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
@@ -1356,61 +1417,176 @@ fn iso8601_to_epoch_secs(s: &str) -> Option<u64> {
     Some(secs)
 }
 
-/// True if `fetched_at` is older than the weekly TTL (or unparseable → stale).
-fn nvidia_cache_is_stale(fetched_at: &str) -> bool {
+/// True if `validated_at` is older than the weekly TTL (or unparseable → stale).
+fn nvidia_cache_is_stale(validated_at: &str) -> bool {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    match iso8601_to_epoch_secs(fetched_at) {
+    match iso8601_to_epoch_secs(validated_at) {
         Some(then) => now.saturating_sub(then) >= NVIDIA_MODEL_TTL_SECS,
-        None => true, // corrupt timestamp → re-fetch
+        None => true, // corrupt timestamp → re-validate
     }
 }
 
-/// Resolve the Nvidia model id to use RIGHT NOW.
-///   • fresh cache (< 7d)        → return cached model (no network)
-///   • stale / missing cache     → fetch catalogue, select best, cache, return
-///   • fetch/select FAILS        → last cached model (even if stale), else
-///                                 NVIDIA_FALLBACK_MODEL
-/// Never returns an Err: generation must not die because the list didn't load.
-async fn resolve_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
-    let cached = read_nvidia_model_cache(app);
+// ─── PROBE: settle deploy status by actually calling the model ───────
+//
+// THE ROOT CAUSE: a model can be LISTED in /v1/models yet its inference
+// function is NOT deployed → calling it returns HTTP 404 "Function ... Not
+// Found". Names don't reveal this. So before trusting any candidate we POST a
+// 1-token chat completion and see whether it answers.
 
-    if let Some(ref c) = cached {
-        if !nvidia_cache_is_stale(&c.fetched_at) && !c.model.trim().is_empty() {
-            return c.model.clone();
+/// Outcome of probing one candidate.
+///   • Alive        — HTTP 200; safe to use.
+///   • Dead         — 404 / "function not found" / "model ... not found"; skip.
+///   • Inconclusive — network / 5xx / timeout: NOT a dead model, just a
+///                    transient blip. We stop probing and use this model anyway
+///                    (a transient error must not make us discard a good id).
+#[derive(Debug, PartialEq, Eq)]
+enum ProbeResult {
+    Alive,
+    Dead,
+    Inconclusive,
+}
+
+/// POST a tiny chat completion ({model, messages:[{user,"hi"}], max_tokens:1})
+/// to NVIDIA_BASE_URL and classify the response. The probe is intentionally
+/// minimal so the cost of validating a candidate is ~one token.
+async fn probe_nvidia_model(client: &reqwest::Client, key: &str, model: &str) -> ProbeResult {
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 1,
+        "messages": [{"role":"user","content":"hi"}]
+    });
+    let res = client
+        .post(NVIDIA_BASE_URL)
+        .bearer_auth(key)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => ProbeResult::Alive,
+        Ok(r) => {
+            // Non-2xx. A 404 (or a body that names a missing function/model) is
+            // a real dead model. Anything else (401/403/429/5xx) is transient —
+            // don't condemn the model for it.
+            let status = r.status().as_u16();
+            let snippet = r.text().await.unwrap_or_default().to_lowercase();
+            let looks_dead = status == 404
+                || snippet.contains("function")
+                    && (snippet.contains("not found") || snippet.contains("not deployed"))
+                || (snippet.contains("model") && snippet.contains("not found"))
+                || snippet.contains("does not exist");
+            if looks_dead {
+                ProbeResult::Dead
+            } else {
+                ProbeResult::Inconclusive
+            }
+        }
+        // Network / timeout — transient, not a dead model.
+        Err(_) => ProbeResult::Inconclusive,
+    }
+}
+
+/// PROBE a ranked candidate list in order, returning the first that is Alive (or
+/// Inconclusive — a transient blip means "use it, the model isn't proven dead").
+/// Bounded to the first NVIDIA_PROBE_MAX_CANDIDATES to cap cost. Returns None
+/// only when every probed candidate came back Dead.
+async fn probe_ranked_nvidia(
+    client: &reqwest::Client,
+    key: &str,
+    ranked: &[String],
+) -> Option<String> {
+    for model in ranked.iter().take(NVIDIA_PROBE_MAX_CANDIDATES) {
+        match probe_nvidia_model(client, key, model).await {
+            ProbeResult::Alive | ProbeResult::Inconclusive => return Some(model.clone()),
+            ProbeResult::Dead => continue,
+        }
+    }
+    None
+}
+
+/// The hardcoded fallback list as owned Strings (for probe_ranked_nvidia).
+fn nvidia_fallback_ranked() -> Vec<String> {
+    NVIDIA_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect()
+}
+
+/// PROACTIVE selector. Returns the model id to use RIGHT NOW, having PROVED it
+/// answers (or proved nothing dead-able). Never returns Err — generation must
+/// not die because the list/probe didn't cooperate.
+///
+///   • cache validated < 7d ago  → return it (NO probing)
+///   • else: fetch catalogue → rank → probe in order → first Alive/Inconclusive
+///           → cache {model, validated_at=now} → return it
+///   • fetch FAILS               → probe the hardcoded fallback ranked list
+///   • every candidate Dead      → return the top fallback (let real generation
+///                                 surface the error) — never panic
+async fn ensure_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
+    // Fresh cache short-circuit — a model proven alive < 7d ago is trusted
+    // without re-probing.
+    if let Some(c) = read_nvidia_model_cache(app) {
+        if !nvidia_cache_is_stale(&c.validated_at) && !c.model.trim().is_empty() {
+            return c.model;
         }
     }
 
-    // Stale or absent → try a fresh fetch + select.
-    match fetch_nvidia_models(key).await {
-        Ok(ids) => match select_best_nvidia_model(&ids) {
-            Some(best) => {
-                let _ = write_nvidia_model_cache(app, &best); // best-effort
-                best
+    // A short-timeout no-redirect client for the probe POSTs (same posture as
+    // the catalogue fetch). If even this fails to build, fall straight back.
+    let probe_client = match no_redirect_client(15) {
+        Ok(c) => c,
+        Err(_) => return NVIDIA_FALLBACK_MODEL.to_string(),
+    };
+
+    // Build the ranked candidate list: the live catalogue if we can fetch it,
+    // otherwise the known-alive hardcoded fallback list.
+    let ranked = match fetch_nvidia_models(key).await {
+        Ok(ids) => {
+            let r = ranked_nvidia_models(&ids);
+            if r.is_empty() {
+                nvidia_fallback_ranked()
+            } else {
+                r
             }
-            // Catalogue came back but nothing suitable — keep prior choice if
-            // any, else fall back.
-            None => cached
-                .map(|c| c.model)
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or_else(|| NVIDIA_FALLBACK_MODEL.to_string()),
-        },
-        // Fetch failed (network/HTTP/JSON/empty) → stale cache beats fallback.
-        Err(_) => cached
-            .map(|c| c.model)
-            .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| NVIDIA_FALLBACK_MODEL.to_string()),
+        }
+        Err(_) => nvidia_fallback_ranked(),
+    };
+
+    match probe_ranked_nvidia(&probe_client, key, &ranked).await {
+        Some(model) => {
+            let _ = write_nvidia_model_cache(app, &model); // best-effort
+            model
+        }
+        // Every probed candidate was Dead. Return the top fallback and let real
+        // generation surface the error — don't cache (it isn't proven alive),
+        // don't panic.
+        None => NVIDIA_FALLBACK_MODEL.to_string(),
     }
 }
 
-/// Force a fresh resolve (ignore any fresh-cache short-circuit) by invalidating
-/// the cache first. Used by the self-heal retry.
-async fn force_resolve_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
+/// Force a fresh ensure (ignore any fresh-cache short-circuit) by invalidating
+/// the cache first. Used by the self-heal retry after a model dies mid-flight.
+async fn force_ensure_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
     invalidate_nvidia_model_cache(app);
-    resolve_nvidia_model(app, key).await
+    ensure_nvidia_model(app, key).await
+}
+
+/// Back-compat resolver used by call sites that just need "the model to use"
+/// (e.g. test_connection). Delegates to the proactive ensure path so the test
+/// exercises a PROVED-alive id, not a blindly-picked one.
+async fn resolve_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
+    ensure_nvidia_model(app, key).await
+}
+
+/// `#[tauri::command]` proactive selector for the UI / explicit refresh. Reads
+/// the Nvidia key from the Keychain itself, then runs ensure_nvidia_model.
+/// Returns Err only when there's no key on file (or the Keychain read fails);
+/// the model-selection itself never errors.
+#[tauri::command]
+async fn nvidia_ensure_model(app: tauri::AppHandle) -> Result<String, String> {
+    let key = read_key("nvidia")?;
+    Ok(ensure_nvidia_model(&app, key.as_str()).await)
 }
 
 /// Heuristic: does this error string look like a model-not-found / retired /
@@ -1428,26 +1604,30 @@ fn is_model_not_found_error(err: &str) -> bool {
         || e.contains("404:")
 }
 
-/// The self-healing Nvidia generation entry point. Resolves the model (cached /
-/// weekly), runs the chat call, and if it fails specifically because the model
-/// id is gone, invalidates the cache, RE-RESOLVES once with a fresh fetch, and
-/// RETRIES the generation a single time. Any other error (or a second failure)
-/// is surfaced. This is the call every Nvidia generation site routes through.
+/// The self-healing Nvidia generation entry point. Gets the cached working model
+/// (via ensure_nvidia_model — proven alive < 7d ago, or freshly probed), runs
+/// the chat call, and if it fails specifically because the model id is gone
+/// (it died SINCE validation), invalidates the cache, RE-ENSURES once with a
+/// fresh probe, and RETRIES the generation a single time. If the re-ensured id
+/// equals the failed one (or everything is dead), the error is surfaced — no
+/// loop. Any other error is surfaced as-is. This is the call every Nvidia
+/// generation site (and test_connection, indirectly via resolve) routes through.
 async fn call_nvidia_with_heal(
     app: &tauri::AppHandle,
     client: &reqwest::Client,
     key: &str,
     user_prompt: &str,
 ) -> Result<String, String> {
-    let model = resolve_nvidia_model(app, key).await;
+    let model = ensure_nvidia_model(app, key).await;
     match call_nvidia_memo(client, key, &model, user_prompt).await {
         Ok(text) => Ok(text),
         Err(e) if is_model_not_found_error(&e) => {
-            // The cached/resolved id is dead — force a fresh pick and retry once.
-            let fresh = force_resolve_nvidia_model(app, key).await;
+            // The validated id died mid-flight — invalidate, re-probe, retry once.
+            let fresh = force_ensure_nvidia_model(app, key).await;
             if fresh == model {
-                // Re-fetch produced the same (still-bad) id, or fetch failed and
-                // we fell back to the same value — a retry would just 404 again.
+                // Re-probe produced the same (now-dead) id, or everything probed
+                // dead and we fell back to the same value — a retry would just
+                // 404 again.
                 return Err(e);
             }
             call_nvidia_memo(client, key, &fresh, user_prompt).await
@@ -4944,6 +5124,7 @@ pub fn run() {
             list_configured_providers,
             test_connection,
             nvidia_current_model,
+            nvidia_ensure_model,
             fetch_url_text,
             quick_memo,
             ic_report_section,

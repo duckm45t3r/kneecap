@@ -171,6 +171,46 @@ function writeStoredProvider(p: Provider): void {
   window.localStorage.setItem(ACTIVE_PROVIDER_KEY, p);
 }
 
+// ─── Per-provider enable/disable (Wei's request) ──────────────────────
+//
+// Even when a key is bound (or the device is VHS-linked), the user can disable
+// a provider in Settings so it drops out of every generate-flow dropdown + the
+// indicator. The map is persisted (provider→bool) and DEFAULTS to enabled: a
+// provider counts as enabled UNLESS it is explicitly stored as false. We never
+// delete the underlying key — disabling is purely a UI gate.
+const PROVIDER_ENABLED_KEY = "kneecap_provider_enabled";
+
+function readProviderEnabled(): Partial<Record<Provider, boolean>> {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  try {
+    const raw = window.localStorage.getItem(PROVIDER_ENABLED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Partial<Record<Provider, boolean>> = {};
+    for (const p of ALL_PROVIDERS) {
+      const v = (parsed as Record<string, unknown>)[p];
+      if (typeof v === "boolean") out[p] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeProviderEnabled(map: Partial<Record<Provider, boolean>>): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.setItem(PROVIDER_ENABLED_KEY, JSON.stringify(map));
+}
+
+/** A provider is enabled unless the map explicitly stores `false` for it. */
+function isProviderEnabled(
+  map: Partial<Record<Provider, boolean>>,
+  p: Provider,
+): boolean {
+  return map[p] !== false;
+}
+
 // ─── Frontend model-name mapping ──────────────────────────────────────
 //
 // What model each provider actually runs, for display under the logo. Static
@@ -497,10 +537,28 @@ function App() {
     writeStoredProvider(p);
   }, []);
 
+  // Per-provider enable/disable map (persisted). A provider is enabled unless
+  // explicitly false. Toggling rewrites localStorage AND state so the change is
+  // reactive — availableProviders recomputes, dropping a disabled provider out
+  // of every dropdown + the indicator with no reload.
+  const [providerEnabled, setProviderEnabled] = useState<
+    Partial<Record<Provider, boolean>>
+  >(() => readProviderEnabled());
+  const toggleProviderEnabled = useCallback((p: Provider, enabled: boolean) => {
+    setProviderEnabled((prev) => {
+      const next = { ...prev, [p]: enabled };
+      writeProviderEnabled(next);
+      return next;
+    });
+  }, []);
+
   // The live Nvidia model id (e.g. "nvidia/nemotron-super-49b-v1"), resolved on
   // first Nvidia use. null while loading / before first use → indicator shows
   // "auto". Refreshed on mount and whenever the active provider becomes nvidia.
   const [nvidiaModel, setNvidiaModel] = useState<string | null>(null);
+  // True while a proactive `nvidia_ensure_model` probe is in flight → the
+  // indicator shows "checking…" instead of the cached/auto label.
+  const [nvidiaChecking, setNvidiaChecking] = useState(false);
   const refreshNvidiaModel = useCallback(async () => {
     try {
       setNvidiaModel((await invoke<string | null>("nvidia_current_model")) ?? null);
@@ -509,6 +567,33 @@ function App() {
       setNvidiaModel(null);
     }
   }, []);
+
+  // Proactive probe: when Nvidia becomes the active provider we kick off
+  // `nvidia_ensure_model` in the background. It fetches the live candidate list,
+  // probes each, caches the first that answers, and returns its id. While it
+  // runs the indicator shows "checking…"; on success we set the resolved id
+  // (leading "nvidia/" stripped by the indicator) and re-read the cache so it
+  // stays in sync; on error we quietly fall back to the existing cache/"auto"
+  // behaviour. A guard ref stops it from looping / double-firing.
+  const nvidiaEnsureInFlight = useRef(false);
+  const ensureNvidiaModel = useCallback(async () => {
+    if (nvidiaEnsureInFlight.current) return;
+    nvidiaEnsureInFlight.current = true;
+    setNvidiaChecking(true);
+    try {
+      const id = await invoke<string>("nvidia_ensure_model");
+      if (id) setNvidiaModel(id);
+      // Re-read the cache so the indicator matches what Rust just persisted.
+      await refreshNvidiaModel();
+    } catch (e) {
+      // Key missing / probe failed / offline — keep the existing cache or fall
+      // back to "auto". No surfaced error; the next run will re-probe.
+      console.error("nvidia_ensure_model failed", e);
+    } finally {
+      setNvidiaChecking(false);
+      nvidiaEnsureInFlight.current = false;
+    }
+  }, [refreshNvidiaModel]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -630,11 +715,16 @@ function App() {
 
   // The full set of providers a flow can run with: BYO keys + Local (from the
   // Keychain scan) plus VHS-hosted when the device is linked. This is what the
-  // flows and ProviderPicker receive so "vhs" shows up as selectable.
-  const availableProviders = useMemo<Provider[]>(
-    () => (vhsLinked ? [...configuredProviders, "vhs"] : configuredProviders),
-    [configuredProviders, vhsLinked],
-  );
+  // flows and ProviderPicker receive so "vhs" shows up as selectable. A provider
+  // the user has DISABLED in Settings is filtered out here — so it drops from
+  // every dropdown, the active-provider clamp, and the indicator — without the
+  // key being deleted. Default is enabled (see isProviderEnabled).
+  const availableProviders = useMemo<Provider[]>(() => {
+    const bound: Provider[] = vhsLinked
+      ? [...configuredProviders, "vhs"]
+      : configuredProviders;
+    return bound.filter((p) => isProviderEnabled(providerEnabled, p));
+  }, [configuredProviders, vhsLinked, providerEnabled]);
 
   const hasAnyKey = availableProviders.length > 0;
   const headerSubtitle = useMemo(() => {
@@ -657,16 +747,26 @@ function App() {
     setActiveProvider(cloudFirst);
   }, [availableProviders, activeProvider, setActiveProvider]);
 
-  // Resolve the Nvidia model id on mount and whenever the active provider
-  // becomes nvidia (it resolves on first Nvidia use, so this catches the value
-  // once a run has happened). Cheap, no-network command — safe to re-run.
+  // Nvidia model resolution. When Nvidia is the active provider (on mount if it
+  // already is, or the moment it's selected) we PROACTIVELY probe via
+  // `nvidia_ensure_model` — it picks + caches a working model live and returns
+  // it. The ensure call refreshes the cache itself on completion. For any other
+  // provider we just read the cache (cheap, no network) so the value is current
+  // if the user flips back. The ensure guard ref prevents a loop.
   useEffect(() => {
-    refreshNvidiaModel();
-  }, [refreshNvidiaModel, activeProvider]);
+    if (activeProvider === "nvidia") {
+      ensureNvidiaModel();
+    } else {
+      refreshNvidiaModel();
+    }
+  }, [activeProvider, ensureNvidiaModel, refreshNvidiaModel]);
 
   const activeModelLabel = useMemo(
-    () => resolveModelLabel(activeProvider, nvidiaModel),
-    [activeProvider, nvidiaModel],
+    () =>
+      activeProvider === "nvidia" && nvidiaChecking
+        ? "checking…"
+        : resolveModelLabel(activeProvider, nvidiaModel),
+    [activeProvider, nvidiaModel, nvidiaChecking],
   );
 
   // Which primary-nav entry the sidebar should highlight for the current view.
@@ -739,6 +839,8 @@ function App() {
               vhsLinked={vhsLinked}
               activeProvider={activeProvider}
               setActiveProvider={setActiveProvider}
+              providerEnabled={providerEnabled}
+              toggleProviderEnabled={toggleProviderEnabled}
               refresh={refreshProviders}
               showToast={showToast}
               onOpenTemplateEditor={() => setView("template-editor")}
@@ -1027,6 +1129,8 @@ function Settings({
   vhsLinked,
   activeProvider,
   setActiveProvider,
+  providerEnabled,
+  toggleProviderEnabled,
   refresh,
   showToast,
   onOpenTemplateEditor,
@@ -1039,6 +1143,10 @@ function Settings({
   // initialises from and reports back to the app's current provider.
   activeProvider: Provider;
   setActiveProvider: (p: Provider) => void;
+  // Per-provider enable/disable map + setter (persisted in App). Threaded into
+  // each connection option so it can render its on/off toggle.
+  providerEnabled: Partial<Record<Provider, boolean>>;
+  toggleProviderEnabled: (p: Provider, enabled: boolean) => void;
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
   onOpenTemplateEditor: () => void;
@@ -1070,17 +1178,27 @@ function Settings({
 
         <ByoKeyOption
           configuredProviders={configuredProviders}
+          providerEnabled={providerEnabled}
+          toggleProviderEnabled={toggleProviderEnabled}
           refresh={refresh}
           showToast={showToast}
         />
 
         <LocalModelOption
           isConfigured={configuredProviders.includes("local")}
+          providerEnabled={providerEnabled}
+          toggleProviderEnabled={toggleProviderEnabled}
           refresh={refresh}
           showToast={showToast}
         />
 
-        <VhsHostedOption linked={vhsLinked} refresh={refresh} showToast={showToast} />
+        <VhsHostedOption
+          linked={vhsLinked}
+          providerEnabled={providerEnabled}
+          toggleProviderEnabled={toggleProviderEnabled}
+          refresh={refresh}
+          showToast={showToast}
+        />
       </section>
 
       <section className="kn-section">
@@ -1457,14 +1575,51 @@ function FormatLearningOption({
   );
 }
 
+// ─── Per-provider enable/disable toggle ───────────────────────────────
+//
+// Small on/off switch shown next to a CONNECTED provider in Settings. Lets the
+// user exclude a provider from every generate flow without deleting its key.
+// Reads "enabled unless explicitly false" from the shared map; flipping it calls
+// back into App (persists + recomputes availableProviders reactively).
+function ProviderToggle({
+  provider,
+  providerEnabled,
+  toggleProviderEnabled,
+}: {
+  provider: Provider;
+  providerEnabled: Partial<Record<Provider, boolean>>;
+  toggleProviderEnabled: (p: Provider, enabled: boolean) => void;
+}) {
+  const enabled = isProviderEnabled(providerEnabled, provider);
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      className={`kn-provider-toggle ${enabled ? "kn-provider-toggle--on" : ""}`}
+      onClick={() => toggleProviderEnabled(provider, !enabled)}
+      title={enabled ? "Disable this provider" : "Enable this provider"}
+    >
+      <span className="kn-provider-toggle-track">
+        <span className="kn-provider-toggle-thumb" />
+      </span>
+      <span className="kn-provider-toggle-text">{enabled ? "On" : "Off"}</span>
+    </button>
+  );
+}
+
 // ─── BYO key option (A) ───────────────────────────────────────────────
 
 function ByoKeyOption({
   configuredProviders,
+  providerEnabled,
+  toggleProviderEnabled,
   refresh,
   showToast,
 }: {
   configuredProviders: Provider[];
+  providerEnabled: Partial<Record<Provider, boolean>>;
+  toggleProviderEnabled: (p: Provider, enabled: boolean) => void;
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
@@ -1608,6 +1763,11 @@ function ByoKeyOption({
             {configuredProviders.includes(p) ? (
               <>
                 <span className="kn-key-status kn-key-status--on">connected</span>
+                <ProviderToggle
+                  provider={p}
+                  providerEnabled={providerEnabled}
+                  toggleProviderEnabled={toggleProviderEnabled}
+                />
                 <button
                   className={`kn-link-btn ${
                     pendingRemove === p ? "kn-link-btn--danger" : ""
@@ -1631,10 +1791,14 @@ function ByoKeyOption({
 
 function LocalModelOption({
   isConfigured,
+  providerEnabled,
+  toggleProviderEnabled,
   refresh,
   showToast,
 }: {
   isConfigured: boolean;
+  providerEnabled: Partial<Record<Provider, boolean>>;
+  toggleProviderEnabled: (p: Provider, enabled: boolean) => void;
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
@@ -1747,6 +1911,13 @@ function LocalModelOption({
           <span className={`kn-key-status ${isConfigured ? "kn-key-status--on" : "kn-key-status--off"}`}>
             {isConfigured ? "configured" : "not configured"}
           </span>
+          {isConfigured && (
+            <ProviderToggle
+              provider="local"
+              providerEnabled={providerEnabled}
+              toggleProviderEnabled={toggleProviderEnabled}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -1777,10 +1948,14 @@ type BindPhase =
 
 function VhsHostedOption({
   linked,
+  providerEnabled,
+  toggleProviderEnabled,
   refresh,
   showToast,
 }: {
   linked: boolean;
+  providerEnabled: Partial<Record<Provider, boolean>>;
+  toggleProviderEnabled: (p: Provider, enabled: boolean) => void;
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
@@ -1872,6 +2047,11 @@ function VhsHostedOption({
           <div className="kn-key-row">
             <span className="kn-key-name">{PROVIDER_LABELS.vhs}</span>
             <span className="kn-key-status kn-key-status--on">linked</span>
+            <ProviderToggle
+              provider="vhs"
+              providerEnabled={providerEnabled}
+              toggleProviderEnabled={toggleProviderEnabled}
+            />
             <button className="kn-link-btn" onClick={handleUnlink}>
               Unlink
             </button>
