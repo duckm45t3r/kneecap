@@ -17,9 +17,27 @@ const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai", "gemini", "nvidia"
 
 // Nvidia's hosted inference API is OpenAI-compatible (chat-completions shape,
 // Bearer auth) so we reuse the OpenAI request/response structs and only swap
-// the base URL + model. Pull the model out as a const so it's a one-line swap.
+// the base URL + model.
 const NVIDIA_BASE_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
-const NVIDIA_MODEL: &str = "nvidia/llama-3.3-nemotron-super-49b-v1";
+
+// OpenAI-compatible model-catalogue endpoint. GET with Bearer auth returns
+// `{ "data": [ { "id": "...", ... }, ... ] }`. We poll this (weekly, cached)
+// so a deprecated / paused / renamed model never silently 404s the provider.
+const NVIDIA_MODELS_URL: &str = "https://integrate.api.nvidia.com/v1/models";
+
+// LAST-RESORT default only. The live model is normally chosen by
+// resolve_nvidia_model from the fetched catalogue (see fetch_nvidia_models /
+// select_best_nvidia_model). We fall back to this hardcoded id only when the
+// catalogue fetch fails AND there is no cached choice on disk — i.e. never
+// hard-fail generation just because the model-list request didn't come back.
+// (This is the exact id that 404'd once it was retired upstream, kept solely
+// as a better-than-nothing seed; the self-heal path will replace it.)
+const NVIDIA_FALLBACK_MODEL: &str = "nvidia/llama-3.3-nemotron-super-49b-v1";
+
+// Re-fetch the catalogue when the cached choice is older than this. "At least
+// weekly" per the requirement — a retired model is detected within 7 days even
+// if no generation call happens to trip the self-heal path first.
+const NVIDIA_MODEL_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 
 // ─── SSRF defence (4 layers) ─────────────────────────────────────────
 //
@@ -285,7 +303,7 @@ fn no_redirect_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
 }
 
 #[tauri::command]
-async fn test_connection(provider: String) -> Result<String, String> {
+async fn test_connection(app: tauri::AppHandle, provider: String) -> Result<String, String> {
     let key = read_key(&provider)?;
     let client = no_redirect_client(15)?;
 
@@ -331,9 +349,13 @@ async fn test_connection(provider: String) -> Result<String, String> {
         }
         "nvidia" => {
             // OpenAI-compatible chat-completions endpoint + Bearer auth; only
-            // the base URL and model differ from the openai arm above.
+            // the base URL and model differ from the openai arm above. The model
+            // is resolved live (cached/weekly/self-healing) so the test exercises
+            // the SAME id real generation will use — a retired hardcoded id won't
+            // green-light here while 404ing in production.
+            let resolved = resolve_nvidia_model(&app, key.as_str()).await;
             let body = TestReq {
-                model: NVIDIA_MODEL,
+                model: &resolved,
                 max_tokens: 8,
                 messages: vec![ChatMsg {
                     role: "user",
@@ -842,7 +864,10 @@ fn build_memo_prompt(source_text: &str, note: &str, template: &str, prompt_overr
 }
 
 #[tauri::command]
-async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
+async fn quick_memo(
+    app: tauri::AppHandle,
+    input: QuickMemoInput,
+) -> Result<QuickMemoOutput, String> {
     let key = read_key(&input.provider)?;
 
     // 1. Resolve source — URL fetch, pasted text, or PDF. Capable providers get
@@ -874,7 +899,7 @@ async fn quick_memo(input: QuickMemoInput) -> Result<QuickMemoOutput, String> {
     let memo = match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, key.as_str(), &user_prompt, pdf).await?,
         "openai" => call_openai_memo(&client, key.as_str(), &user_prompt, pdf).await?,
-        "nvidia" => call_nvidia_memo(&client, key.as_str(), &user_prompt).await?,
+        "nvidia" => call_nvidia_with_heal(&app, &client, key.as_str(), &user_prompt).await?,
         "gemini" => call_gemini_memo(&client, key.as_str(), &user_prompt, pdf).await?,
         "local" => call_local_memo(&client, &user_prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
@@ -1048,15 +1073,22 @@ async fn call_openai_memo(
 // Nvidia's hosted inference API is OpenAI-compatible — same chat-completions
 // request body and response shape, same Bearer auth — so this mirrors
 // call_openai_memo exactly and reuses the OpenAiReply structs. Only the base
-// URL (NVIDIA_BASE_URL) and model (NVIDIA_MODEL) differ.
+// URL (NVIDIA_BASE_URL) differs.
+//
+// The model id is NOT a const here — it's resolved per call by
+// resolve_nvidia_model (cached, weekly TTL, self-healing). Generation call
+// sites should go through call_nvidia_with_heal, which threads the resolved id
+// in here and retries once on a model-not-found error with a freshly fetched
+// pick. Pass the model in so this stays a dumb HTTP shim.
 
 async fn call_nvidia_memo(
     client: &reqwest::Client,
     key: &str,
+    model: &str,
     user_prompt: &str,
 ) -> Result<String, String> {
     let body = serde_json::json!({
-        "model": NVIDIA_MODEL,
+        "model": model,
         "max_tokens": 2000,
         "messages": [{"role":"user","content": user_prompt}]
     });
@@ -1092,6 +1124,343 @@ async fn call_nvidia_memo(
         return Err("Empty response from Nvidia".to_string());
     }
     Ok(text)
+}
+
+// ─── Nvidia model self-healing (catalogue fetch + weekly cache) ──────
+//
+// THE PROBLEM THIS SOLVES: a hardcoded model id (NVIDIA_FALLBACK_MODEL) goes
+// stale the moment Nvidia retires / pauses / renames it — every Nvidia call
+// then 404s "model does not exist" and the whole provider is dead until a code
+// change. Instead we periodically pull Nvidia's OpenAI-compatible model
+// catalogue, pick the most suitable Nemotron, cache the choice with a weekly
+// TTL, and self-heal on a model-not-found error by re-fetching once.
+//
+// Everything here is defensive: a malformed list, empty list, network error,
+// or bad JSON falls back to the last cached choice (even if stale) or finally
+// to NVIDIA_FALLBACK_MODEL. Generation never hard-fails because the catalogue
+// request didn't come back.
+
+/// One entry of the `/v1/models` `data` array. We only need `id`; everything
+/// else (object/owned_by/created) is ignored. `id` is Optional so a single
+/// malformed entry that's missing the field doesn't fail the whole parse.
+#[derive(Deserialize)]
+struct NvidiaModelEntry {
+    id: Option<String>,
+}
+
+/// `{ "data": [ { "id": ... }, ... ] }`. `data` is Optional so a body that's
+/// shaped differently (or an error object) deserialises to `None` rather than
+/// erroring — the caller then falls back.
+#[derive(Deserialize)]
+struct NvidiaModelList {
+    data: Option<Vec<NvidiaModelEntry>>,
+}
+
+/// On-disk cache at `{app_data_dir}/nvidia_model.json`. `fetched_at` is an
+/// ISO-8601 UTC string from now_iso8601() (matches the rest of the codebase);
+/// we parse it back to epoch seconds for the TTL check.
+#[derive(Serialize, Deserialize)]
+struct NvidiaModelCache {
+    model: String,
+    fetched_at: String,
+}
+
+/// GET the OpenAI-compatible model catalogue. Returns the list of model ids.
+/// Reuses a short-timeout no-redirect client (15s — a catalogue GET is small;
+/// we don't want to stall a generation behind a slow list call). Any network /
+/// HTTP / JSON / empty-list problem is an Err so resolve_nvidia_model can fall
+/// back to cache.
+async fn fetch_nvidia_models(key: &str) -> Result<Vec<String>, String> {
+    let client = no_redirect_client(15)?;
+    let res = client
+        .get(NVIDIA_MODELS_URL)
+        .bearer_auth(key)
+        .header("content-type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
+    if !res.status().is_success() {
+        return Err(format!("HTTP {}", res.status().as_u16()));
+    }
+    let parsed: NvidiaModelList = res.json().await.map_err(|e| e.to_string())?;
+    let ids: Vec<String> = parsed
+        .data
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| e.id)
+        .filter(|id| !id.trim().is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Err("Nvidia model list was empty".to_string());
+    }
+    Ok(ids)
+}
+
+/// Score a single model id for memo / IC-report generation. Higher = better.
+/// `i32::MIN` (returned as `None` by the caller's filter) means "never pick
+/// this". The scoring is additive so it adapts as the catalogue changes — we
+/// never hardcode one id, we rank by the *properties* we want.
+///
+/// RANKING (high → low), all on the lowercased id:
+///   • DISQUALIFY outright (return None): anything we must not route memos to —
+///     "embed", "rerank", "reward", "guard", "vl"/vision, "code", or a
+///     non-text family. These exist in the catalogue but would break or
+///     degrade prose generation.
+///   • REQUIRE "nemotron": non-nemotron ids score below every nemotron id.
+///     (We still let them through with a low score as an absolute last resort
+///     if somehow no nemotron exists, but the resolver prefers a real
+///     nemotron — see select_best_nvidia_model.)
+///   • PREFER an instruct/chat-tuned variant ("instruct" or "chat") — these are
+///     the ones tuned for following a memo prompt vs. a base/reasoning dump.
+///   • PREFER a strong-but-practical size tier: "super" (the sweet spot:
+///     49b-class, strong yet hostable) > an explicit "70b" / "llama-3.3" /
+///     "llama-3.1" instruct > unspecified.
+///   • PENALISE the tiny tiers — "nano" / "mini" / "micro" — they're cheaper
+///     but weaker for long-form IC reasoning, so they sink below the mid tiers
+///     without being fully disqualified.
+fn score_nvidia_model(id_lower: &str) -> Option<i32> {
+    // Hard disqualifiers: a substring match here = never route memos to it.
+    const DISQUALIFY: &[&str] = &[
+        "embed", "rerank", "reward", "guard", "vision", "-vl", "vl-", "code", "ocr",
+    ];
+    if DISQUALIFY.iter().any(|bad| id_lower.contains(bad)) {
+        return None;
+    }
+
+    let mut score = 0i32;
+
+    let is_nemotron = id_lower.contains("nemotron");
+    if is_nemotron {
+        score += 1000;
+    }
+
+    // Instruct / chat tuning — what we actually want for prompt following.
+    if id_lower.contains("instruct") {
+        score += 400;
+    } else if id_lower.contains("chat") {
+        score += 250;
+    }
+
+    // Size / capability tier.
+    if id_lower.contains("super") {
+        score += 300;
+    } else if id_lower.contains("70b")
+        || id_lower.contains("llama-3.3")
+        || id_lower.contains("llama-3.1")
+    {
+        score += 200;
+    }
+
+    // Penalise the tiny tiers (cheaper, weaker for long IC reasoning).
+    if id_lower.contains("nano") || id_lower.contains("mini") || id_lower.contains("micro") {
+        score -= 350;
+    }
+
+    // A bare non-nemotron model with nothing else going for it isn't worth
+    // routing to over the hardcoded fallback — treat as unpickable.
+    if !is_nemotron && score <= 0 {
+        return None;
+    }
+
+    Some(score)
+}
+
+/// Pick the highest-scoring model id (ranked heuristic, see score_nvidia_model).
+/// Returns None when nothing in the catalogue is suitable — the resolver then
+/// keeps whatever it already had / the fallback. Ties broken by the shorter id
+/// then lexicographically, purely for determinism.
+fn select_best_nvidia_model(ids: &[String]) -> Option<String> {
+    ids.iter()
+        .filter_map(|id| score_nvidia_model(&id.to_lowercase()).map(|s| (s, id)))
+        .max_by(|(sa, ia), (sb, ib)| {
+            sa.cmp(sb)
+                .then_with(|| ib.len().cmp(&ia.len())) // prefer shorter id
+                .then_with(|| ib.as_str().cmp(ia.as_str()))
+        })
+        .map(|(_, id)| id.clone())
+}
+
+/// Path to `{app_data_dir}/nvidia_model.json` (parent dir created on first
+/// use), mirroring configured_marker_path / db_path.
+fn nvidia_model_cache_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Cannot resolve app data dir: {}", e))?;
+    std::fs::create_dir_all(&base)
+        .map_err(|e| format!("Cannot create app data dir: {}", e))?;
+    Ok(base.join("nvidia_model.json"))
+}
+
+/// Read the cache. Missing / unreadable / corrupt file → None (not an error),
+/// same degrade-gracefully posture as read_marker.
+fn read_nvidia_model_cache(app: &tauri::AppHandle) -> Option<NvidiaModelCache> {
+    let path = nvidia_model_cache_path(app).ok()?;
+    let s = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&s).ok()
+}
+
+/// Persist the chosen model + fetch time. Best-effort: a write failure is
+/// swallowed by the caller (we still return the model), since the only cost is
+/// re-fetching next time.
+fn write_nvidia_model_cache(app: &tauri::AppHandle, model: &str) -> Result<(), String> {
+    let path = nvidia_model_cache_path(app)?;
+    let cache = NvidiaModelCache {
+        model: model.to_string(),
+        fetched_at: now_iso8601(),
+    };
+    let json = serde_json::to_string(&cache).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
+    Ok(())
+}
+
+/// Delete the cache file so the next resolve forces a fresh fetch+select.
+/// Used by the self-heal path on a model-not-found error. A missing file is
+/// success (already invalidated).
+fn invalidate_nvidia_model_cache(app: &tauri::AppHandle) {
+    if let Ok(path) = nvidia_model_cache_path(app) {
+        let _ = std::fs::remove_file(path); // best-effort; ignore "not found"
+    }
+}
+
+/// Parse a now_iso8601()-style "YYYY-MM-DDTHH:MM:SSZ" back to epoch seconds.
+/// Returns None on any malformed input so a corrupt timestamp is treated as
+/// "stale" (force a re-fetch) rather than panicking. Inverse of now_iso8601's
+/// civil-date math (Howard Hinnant days-from-civil).
+fn iso8601_to_epoch_secs(s: &str) -> Option<u64> {
+    let s = s.trim().strip_suffix('Z').unwrap_or(s.trim());
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.split('-');
+    let y: i64 = d.next()?.parse().ok()?;
+    let m: i64 = d.next()?.parse().ok()?;
+    let day: i64 = d.next()?.parse().ok()?;
+    let mut t = time.split(':');
+    let hh: i64 = t.next()?.parse().ok()?;
+    let mm: i64 = t.next()?.parse().ok()?;
+    let ss: i64 = t.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // days_from_civil (Howard Hinnant), the inverse of now_iso8601.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    if days < 0 {
+        return None;
+    }
+    let secs = (days as u64) * 86_400 + (hh as u64) * 3600 + (mm as u64) * 60 + ss as u64;
+    Some(secs)
+}
+
+/// True if `fetched_at` is older than the weekly TTL (or unparseable → stale).
+fn nvidia_cache_is_stale(fetched_at: &str) -> bool {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match iso8601_to_epoch_secs(fetched_at) {
+        Some(then) => now.saturating_sub(then) >= NVIDIA_MODEL_TTL_SECS,
+        None => true, // corrupt timestamp → re-fetch
+    }
+}
+
+/// Resolve the Nvidia model id to use RIGHT NOW.
+///   • fresh cache (< 7d)        → return cached model (no network)
+///   • stale / missing cache     → fetch catalogue, select best, cache, return
+///   • fetch/select FAILS        → last cached model (even if stale), else
+///                                 NVIDIA_FALLBACK_MODEL
+/// Never returns an Err: generation must not die because the list didn't load.
+async fn resolve_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
+    let cached = read_nvidia_model_cache(app);
+
+    if let Some(ref c) = cached {
+        if !nvidia_cache_is_stale(&c.fetched_at) && !c.model.trim().is_empty() {
+            return c.model.clone();
+        }
+    }
+
+    // Stale or absent → try a fresh fetch + select.
+    match fetch_nvidia_models(key).await {
+        Ok(ids) => match select_best_nvidia_model(&ids) {
+            Some(best) => {
+                let _ = write_nvidia_model_cache(app, &best); // best-effort
+                best
+            }
+            // Catalogue came back but nothing suitable — keep prior choice if
+            // any, else fall back.
+            None => cached
+                .map(|c| c.model)
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| NVIDIA_FALLBACK_MODEL.to_string()),
+        },
+        // Fetch failed (network/HTTP/JSON/empty) → stale cache beats fallback.
+        Err(_) => cached
+            .map(|c| c.model)
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| NVIDIA_FALLBACK_MODEL.to_string()),
+    }
+}
+
+/// Force a fresh resolve (ignore any fresh-cache short-circuit) by invalidating
+/// the cache first. Used by the self-heal retry.
+async fn force_resolve_nvidia_model(app: &tauri::AppHandle, key: &str) -> String {
+    invalidate_nvidia_model_cache(app);
+    resolve_nvidia_model(app, key).await
+}
+
+/// Heuristic: does this error string look like a model-not-found / retired /
+/// renamed model? These are the strings Nvidia's OpenAI-compatible endpoint
+/// returns (echoed into our "HTTP <code>: <body>" Err) when the requested model
+/// id is gone. 404 alone is included because a retired model id returns 404.
+fn is_model_not_found_error(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("does not exist")
+        || e.contains("model not found")
+        || e.contains("no such model")
+        || e.contains("unknown model")
+        || e.contains("invalid model")
+        || e.contains("http 404")
+        || e.contains("404:")
+}
+
+/// The self-healing Nvidia generation entry point. Resolves the model (cached /
+/// weekly), runs the chat call, and if it fails specifically because the model
+/// id is gone, invalidates the cache, RE-RESOLVES once with a fresh fetch, and
+/// RETRIES the generation a single time. Any other error (or a second failure)
+/// is surfaced. This is the call every Nvidia generation site routes through.
+async fn call_nvidia_with_heal(
+    app: &tauri::AppHandle,
+    client: &reqwest::Client,
+    key: &str,
+    user_prompt: &str,
+) -> Result<String, String> {
+    let model = resolve_nvidia_model(app, key).await;
+    match call_nvidia_memo(client, key, &model, user_prompt).await {
+        Ok(text) => Ok(text),
+        Err(e) if is_model_not_found_error(&e) => {
+            // The cached/resolved id is dead — force a fresh pick and retry once.
+            let fresh = force_resolve_nvidia_model(app, key).await;
+            if fresh == model {
+                // Re-fetch produced the same (still-bad) id, or fetch failed and
+                // we fell back to the same value — a retry would just 404 again.
+                return Err(e);
+            }
+            call_nvidia_memo(client, key, &fresh, user_prompt).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Optional UI hook: the currently-cached Nvidia model id (None if never
+/// resolved). Lets Settings show "using <model>" without a network call.
+#[tauri::command]
+fn nvidia_current_model(app: tauri::AppHandle) -> Option<String> {
+    read_nvidia_model_cache(&app).map(|c| c.model)
 }
 
 // ─── Gemini (W3 R2) ──────────────────────────────────────────────────
@@ -1515,7 +1884,10 @@ fn ic_section_prompt(
 }
 
 #[tauri::command]
-async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, String> {
+async fn ic_report_section(
+    app: tauri::AppHandle,
+    input: IcReportInput,
+) -> Result<IcReportOutput, String> {
     let key = read_key(&input.provider)?;
 
     // 'compile' can run with prior sections only, so allow an empty source.
@@ -1575,7 +1947,7 @@ async fn ic_report_section(input: IcReportInput) -> Result<IcReportOutput, Strin
     let content = match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, key.as_str(), &prompt, pdf).await?,
         "openai" => call_openai_memo(&client, key.as_str(), &prompt, pdf).await?,
-        "nvidia" => call_nvidia_memo(&client, key.as_str(), &prompt).await?,
+        "nvidia" => call_nvidia_with_heal(&app, &client, key.as_str(), &prompt).await?,
         "gemini" => call_gemini_memo(&client, key.as_str(), &prompt, pdf).await?,
         "local" => call_local_memo(&client, &prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
@@ -2728,7 +3100,10 @@ pub struct GenerateBlockInput {
 }
 
 #[tauri::command]
-async fn generate_block(input: GenerateBlockInput) -> Result<String, String> {
+async fn generate_block(
+    app: tauri::AppHandle,
+    input: GenerateBlockInput,
+) -> Result<String, String> {
     let prompt_trimmed = input.prompt.trim();
     if prompt_trimmed.is_empty() {
         return Ok(String::new());
@@ -2785,7 +3160,7 @@ async fn generate_block(input: GenerateBlockInput) -> Result<String, String> {
     match input.provider.as_str() {
         "anthropic" => call_anthropic_memo(&client, key.as_str(), &user_prompt, pdf).await,
         "openai" => call_openai_memo(&client, key.as_str(), &user_prompt, pdf).await,
-        "nvidia" => call_nvidia_memo(&client, key.as_str(), &user_prompt).await,
+        "nvidia" => call_nvidia_with_heal(&app, &client, key.as_str(), &user_prompt).await,
         "gemini" => call_gemini_memo(&client, key.as_str(), &user_prompt, pdf).await,
         "local" => call_local_memo(&client, &user_prompt).await,
         other => Err(format!("Unknown provider: {}", other)),
@@ -2914,6 +3289,7 @@ fn build_infer_template_prompt(source_text: &str) -> String {
 /// batch always returns a result for every input.
 #[tauri::command]
 async fn infer_templates(
+    app: tauri::AppHandle,
     provider: String,
     examples: Vec<InferExample>,
 ) -> Result<Vec<InferResult>, String> {
@@ -2939,7 +3315,7 @@ async fn infer_templates(
     let mut out = Vec::with_capacity(examples.len());
     for ex in examples {
         let name = ex.name.clone();
-        match infer_one(&client, &provider, key.as_str(), &ex).await {
+        match infer_one(&app, &client, &provider, key.as_str(), &ex).await {
             Ok(json) => out.push(InferResult {
                 name,
                 template_json: Some(json),
@@ -2959,6 +3335,7 @@ async fn infer_templates(
 /// Kept separate so a `?` early-return becomes a per-example error in the loop
 /// above rather than aborting the whole batch.
 async fn infer_one(
+    app: &tauri::AppHandle,
     client: &reqwest::Client,
     provider: &str,
     key: &str,
@@ -2979,7 +3356,7 @@ async fn infer_one(
     let raw = match provider {
         "anthropic" => call_anthropic_memo(client, key, &user_prompt, pdf).await?,
         "openai" => call_openai_memo(client, key, &user_prompt, pdf).await?,
-        "nvidia" => call_nvidia_memo(client, key, &user_prompt).await?,
+        "nvidia" => call_nvidia_with_heal(app, client, key, &user_prompt).await?,
         "gemini" => call_gemini_memo(client, key, &user_prompt, pdf).await?,
         "local" => call_local_memo(client, &user_prompt).await?,
         other => return Err(format!("Unknown provider: {}", other)),
@@ -4238,6 +4615,7 @@ async fn call_gemini_multi(
 /// `deal_generate_version` via `call_vhs_generate`, which now relays ALL native
 /// PDFs (OPTION B), not just the first.
 async fn dispatch_combined_call(
+    app: &tauri::AppHandle,
     client: &reqwest::Client,
     provider: &str,
     key: &str,
@@ -4266,7 +4644,7 @@ async fn dispatch_combined_call(
                 call_gemini_multi(client, key, prompt, pdfs).await
             }
         }
-        "nvidia" => call_nvidia_memo(client, key, prompt).await,
+        "nvidia" => call_nvidia_with_heal(app, client, key, prompt).await,
         "local" => call_local_memo(client, prompt).await,
         other => Err(format!("Unknown provider: {}", other)),
     }
@@ -4422,7 +4800,7 @@ async fn deal_generate_version(
             memo
         } else {
             let prompt = build_memo_prompt(&combined_text, "", "full-memo", None);
-            dispatch_combined_call(&client, &provider, key.as_str(), &prompt, &pdfs).await?
+            dispatch_combined_call(&app, &client, &provider, key.as_str(), &prompt, &pdfs).await?
         }
     } else {
         // IC: run the existing section sequence, each section seeing the combined
@@ -4476,7 +4854,8 @@ async fn deal_generate_version(
                 .await?;
                 text
             } else {
-                dispatch_combined_call(&client, &provider, key.as_str(), &prompt, &pdfs).await?
+                dispatch_combined_call(&app, &client, &provider, key.as_str(), &prompt, &pdfs)
+                    .await?
             };
 
             prior_sections.push(IcPriorSection {
@@ -4564,6 +4943,7 @@ pub fn run() {
             delete_api_key,
             list_configured_providers,
             test_connection,
+            nvidia_current_model,
             fetch_url_text,
             quick_memo,
             ic_report_section,
