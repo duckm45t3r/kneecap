@@ -87,6 +87,8 @@ function fileToBase64(file: File): Promise<string> {
 export function DealView({
   dealId,
   availableProviders,
+  activeProvider,
+  setActiveProvider,
   templateOptions,
   MarkdownView,
   showToast,
@@ -96,6 +98,10 @@ export function DealView({
 }: {
   dealId: string;
   availableProviders: string[];
+  // Shared app-level provider (read/write), forwarded to the New-Version modal
+  // so picking a provider there is the app's current provider everywhere.
+  activeProvider: string;
+  setActiveProvider: (p: string) => void;
   // Custom templates the New-Version flow can target (id + name). Built-in
   // memo/ic kinds are always available; these extend the picker.
   templateOptions: { id: string; name: string }[];
@@ -232,6 +238,8 @@ export function DealView({
           hasPdfSource={detail.sources.some((s) => s.kind === "pdf")}
           nextSeq={(detail.versions[0]?.seq ?? 0) + 1}
           availableProviders={availableProviders}
+          activeProvider={activeProvider}
+          setActiveProvider={setActiveProvider}
           templateOptions={templateOptions}
           showToast={showToast}
           onClose={() => setShowNewVersion(false)}
@@ -874,6 +882,8 @@ function NewVersionModal({
   hasPdfSource,
   nextSeq,
   availableProviders,
+  activeProvider,
+  setActiveProvider,
   templateOptions,
   showToast,
   onClose,
@@ -885,6 +895,11 @@ function NewVersionModal({
   hasPdfSource: boolean;
   nextSeq: number;
   availableProviders: string[];
+  // Shared app-level provider (read/write). This modal's usable set is exactly
+  // the global `availableProviders`, so the shared value is usable as-is; we
+  // clamp defensively to the first usable one if it ever isn't.
+  activeProvider: string;
+  setActiveProvider: (p: string) => void;
   templateOptions: { id: string; name: string }[];
   showToast: (m: string) => void;
   onClose: () => void;
@@ -896,7 +911,12 @@ function NewVersionModal({
   const [templateId, setTemplateId] = useState("");
   const cloudFirst =
     availableProviders.find((p) => p !== "local") ?? availableProviders[0] ?? "anthropic";
-  const [provider, setProvider] = useState(cloudFirst);
+  // Read the shared provider; fall back to a usable one for THIS run if the
+  // global value somehow isn't available here (does not overwrite the global).
+  const provider = availableProviders.includes(activeProvider)
+    ? activeProvider
+    : cloudFirst;
+  const setProvider = setActiveProvider;
   const [note, setNote] = useState(`v${nextSeq} · ${sourceCount} sources`);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);

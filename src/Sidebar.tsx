@@ -48,6 +48,9 @@ export function Sidebar({
   onNavigate,
   onOpenDeal,
   onGenerateTemplate,
+  activeProvider,
+  activeProviderLabel,
+  activeModelLabel,
   usageSlot,
   themeSlot,
 }: {
@@ -58,6 +61,12 @@ export function Sidebar({
   onNavigate: (nav: SidebarNav) => void;
   onOpenDeal: (id: string) => void;
   onGenerateTemplate: (id: string) => void;
+  // The app's current (shared) provider + the model it runs. Rendered as a
+  // small indicator under the logo so the active provider/model is always in
+  // view. `activeProvider` is null when no provider is connected (hide it).
+  activeProvider: string | null;
+  activeProviderLabel: string;
+  activeModelLabel: string;
   // W5: hosted usage gauge (compact). Rendered by App so the gauge logic stays
   // in one place; null when VHS isn't linked.
   usageSlot?: ReactNode;
@@ -69,6 +78,16 @@ export function Sidebar({
       <button className="kn-sidebar-logo" onClick={() => onNavigate("home")} title="Home">
         KN33C4P
       </button>
+
+      {activeProvider && (
+        <div
+          className="kn-sidebar-active-llm"
+          title={`Active model: ${activeProviderLabel} · ${activeModelLabel}`}
+        >
+          <span className="kn-sidebar-active-llm-provider">{activeProviderLabel}</span>
+          <span className="kn-sidebar-active-llm-model">{activeModelLabel}</span>
+        </div>
+      )}
 
       <nav className="kn-sidebar-nav">
         {NAV_ITEMS.map((item, i) => (

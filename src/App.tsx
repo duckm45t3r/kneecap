@@ -143,6 +143,84 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   vhs: "VHS-hosted",
 };
 
+// ─── Shared provider selection (app-level) ────────────────────────────
+//
+// ONE provider is "active" for the whole app. The main generate flows (Quick
+// Memo, Full IC, template generation, deal New-version) read/write this shared
+// value, so picking a provider in one place becomes the app's current provider
+// everywhere — and the sidebar indicator reflects it. Persisted so it survives
+// restarts. Each flow still CLAMPS to its own usable set at render time.
+const ACTIVE_PROVIDER_KEY = "kneecap_active_provider";
+const ALL_PROVIDERS: Provider[] = [
+  "anthropic",
+  "openai",
+  "nvidia",
+  "gemini",
+  "local",
+  "vhs",
+];
+
+function readStoredProvider(): Provider | null {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  const v = window.localStorage.getItem(ACTIVE_PROVIDER_KEY);
+  return v && (ALL_PROVIDERS as string[]).includes(v) ? (v as Provider) : null;
+}
+
+function writeStoredProvider(p: Provider): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.setItem(ACTIVE_PROVIDER_KEY, p);
+}
+
+// ─── Frontend model-name mapping ──────────────────────────────────────
+//
+// What model each provider actually runs, for display under the logo. Static
+// for the cloud providers; the nvidia + local cases are DYNAMIC (resolved at
+// runtime) and handled by resolveModelLabel below.
+//   - openai      → "GPT-4o mini" is the default; gpt-4o is only used when a PDF
+//                   is attached (vision), so the steady-state label is the mini.
+//   - nvidia      → live auto-selected id from `nvidia_current_model` (a leading
+//                   "nvidia/" is stripped); "auto" until it first resolves.
+//   - local       → the user's configured Ollama model name (mirrored to
+//                   localStorage on save); "local model" if unknown.
+const STATIC_MODEL_NAMES: Partial<Record<Provider, string>> = {
+  anthropic: "Claude Sonnet 4.6",
+  openai: "GPT-4o mini",
+  gemini: "Gemini 2.5 Pro",
+  vhs: "Claude Sonnet 4.6 · hosted",
+};
+
+// localStorage mirror of the saved local (Ollama) model name. The canonical copy
+// lives in the macOS Keychain (read by Rust), but reading it pops a password
+// prompt at startup — the exact thing the app avoids — so we mirror the name
+// here on save purely so the indicator can show it without a Keychain read.
+const LOCAL_MODEL_KEY = "kneecap_local_model";
+
+function readLocalModelName(): string | null {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  const v = window.localStorage.getItem(LOCAL_MODEL_KEY);
+  return v && v.trim() ? v.trim() : null;
+}
+
+/**
+ * Display model name for a provider. `nvidiaModel` is the live value from the
+ * `nvidia_current_model` command (null while loading / before first use).
+ */
+function resolveModelLabel(
+  provider: Provider,
+  nvidiaModel: string | null,
+): string {
+  if (provider === "nvidia") {
+    if (!nvidiaModel) return "auto";
+    return nvidiaModel.startsWith("nvidia/")
+      ? nvidiaModel.slice("nvidia/".length)
+      : nvidiaModel;
+  }
+  if (provider === "local") {
+    return readLocalModelName() ?? "local model";
+  }
+  return STATIC_MODEL_NAMES[provider] ?? PROVIDER_LABELS[provider];
+}
+
 // Providers that read a PDF NATIVELY (vision/document-capable). Mirrors the Rust
 // provider_supports_native_pdf split — keep the two in sync. Everything NOT in
 // this set is text-only: a PDF is reduced to extracted text, so an image/scanned
@@ -407,6 +485,31 @@ function App() {
   // one and the deal list refreshes in one place.
   const [saveToDeal, setSaveToDeal] = useState<SaveToDealRequest | null>(null);
 
+  // UNIFIED app-level provider. One value shared by every generate flow + the
+  // sidebar indicator. Seeded from localStorage so it survives restarts; if the
+  // stored value is gone/unusable the clamp effect below repoints it. Writing it
+  // persists. Default resolves once availableProviders loads (see clamp effect).
+  const [activeProvider, setActiveProviderState] = useState<Provider>(
+    () => readStoredProvider() ?? "anthropic",
+  );
+  const setActiveProvider = useCallback((p: Provider) => {
+    setActiveProviderState(p);
+    writeStoredProvider(p);
+  }, []);
+
+  // The live Nvidia model id (e.g. "nvidia/nemotron-super-49b-v1"), resolved on
+  // first Nvidia use. null while loading / before first use → indicator shows
+  // "auto". Refreshed on mount and whenever the active provider becomes nvidia.
+  const [nvidiaModel, setNvidiaModel] = useState<string | null>(null);
+  const refreshNvidiaModel = useCallback(async () => {
+    try {
+      setNvidiaModel((await invoke<string | null>("nvidia_current_model")) ?? null);
+    } catch (e) {
+      console.error("nvidia_current_model failed", e);
+      setNvidiaModel(null);
+    }
+  }, []);
+
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
@@ -541,6 +644,31 @@ function App() {
     return `${n} providers connected`;
   }, [availableProviders]);
 
+  // Clamp the shared provider to the usable set. When a provider becomes
+  // unusable (key removed, VHS unlinked) — or the persisted value isn't usable
+  // on this machine — repoint to the first usable one, preferring a cloud
+  // provider over local (mirrors each flow's old `cloudFirst` default). No-op
+  // while nothing is usable (keeps the persisted choice for when it returns).
+  useEffect(() => {
+    if (availableProviders.length === 0) return;
+    if (availableProviders.includes(activeProvider)) return;
+    const cloudFirst =
+      availableProviders.find((p) => p !== "local") ?? availableProviders[0];
+    setActiveProvider(cloudFirst);
+  }, [availableProviders, activeProvider, setActiveProvider]);
+
+  // Resolve the Nvidia model id on mount and whenever the active provider
+  // becomes nvidia (it resolves on first Nvidia use, so this catches the value
+  // once a run has happened). Cheap, no-network command — safe to re-run.
+  useEffect(() => {
+    refreshNvidiaModel();
+  }, [refreshNvidiaModel, activeProvider]);
+
+  const activeModelLabel = useMemo(
+    () => resolveModelLabel(activeProvider, nvidiaModel),
+    [activeProvider, nvidiaModel],
+  );
+
   // Which primary-nav entry the sidebar should highlight for the current view.
   const activeNav: SidebarNav | null =
     view === "home"
@@ -581,6 +709,9 @@ function App() {
           onNavigate={handleNavigate}
           onOpenDeal={handleOpenDeal}
           onGenerateTemplate={handleGenerateTemplate}
+          activeProvider={hasAnyKey ? activeProvider : null}
+          activeProviderLabel={PROVIDER_LABELS[activeProvider]}
+          activeModelLabel={activeModelLabel}
           usageSlot={usage ? <UsageGauge usage={usage} variant="compact" /> : null}
           themeSlot={<ThemeToggle variant="compact" />}
         />
@@ -606,6 +737,8 @@ function App() {
               onBack={goHome}
               configuredProviders={configuredProviders}
               vhsLinked={vhsLinked}
+              activeProvider={activeProvider}
+              setActiveProvider={setActiveProvider}
               refresh={refreshProviders}
               showToast={showToast}
               onOpenTemplateEditor={() => setView("template-editor")}
@@ -616,6 +749,8 @@ function App() {
             <QuickMemo
               onBack={goHome}
               configuredProviders={availableProviders}
+              activeProvider={activeProvider}
+              setActiveProvider={setActiveProvider}
               showToast={showToast}
               onUsageChange={refreshUsage}
               onSaveToDeal={openSaveToDeal}
@@ -625,6 +760,8 @@ function App() {
             <IcReport
               onBack={goHome}
               configuredProviders={availableProviders}
+              activeProvider={activeProvider}
+              setActiveProvider={setActiveProvider}
               showToast={showToast}
               onUsageChange={refreshUsage}
               onSaveToDeal={openSaveToDeal}
@@ -637,6 +774,8 @@ function App() {
             <TemplateGallery
               onBack={goHome}
               configuredProviders={availableProviders}
+              activeProvider={activeProvider}
+              setActiveProvider={setActiveProvider}
               showToast={showToast}
               initialTemplateId={pendingTemplateId}
               clearInitialTemplate={() => setPendingTemplateId(null)}
@@ -649,6 +788,11 @@ function App() {
             <DealView
               dealId={selectedDealId}
               availableProviders={availableProviders}
+              activeProvider={activeProvider}
+              // DealView treats providers as plain strings; narrow back to
+              // Provider at this boundary (the value always comes from one of
+              // availableProviders, which are Providers).
+              setActiveProvider={(p) => setActiveProvider(p as Provider)}
               templateOptions={templateOptions}
               MarkdownView={MarkdownView}
               showToast={showToast}
@@ -881,6 +1025,8 @@ function Settings({
   onBack,
   configuredProviders,
   vhsLinked,
+  activeProvider,
+  setActiveProvider,
   refresh,
   showToast,
   onOpenTemplateEditor,
@@ -889,6 +1035,10 @@ function Settings({
   onBack: () => void;
   configuredProviders: Provider[];
   vhsLinked: boolean;
+  // Shared app-level provider — forwarded to Format Learning so its picker
+  // initialises from and reports back to the app's current provider.
+  activeProvider: Provider;
+  setActiveProvider: (p: Provider) => void;
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
   onOpenTemplateEditor: () => void;
@@ -955,6 +1105,8 @@ function Settings({
         </p>
         <FormatLearningOption
           configuredProviders={configuredProviders}
+          activeProvider={activeProvider}
+          setActiveProvider={setActiveProvider}
           showToast={showToast}
           onTemplatesLearned={onTemplatesLearned}
         />
@@ -1015,10 +1167,20 @@ function isTextFile(f: File): boolean {
 
 function FormatLearningOption({
   configuredProviders,
+  activeProvider,
+  setActiveProvider,
   showToast,
   onTemplatesLearned,
 }: {
   configuredProviders: Provider[];
+  // Shared app-level provider. Format Learning's usable set (LEARN_PROVIDERS)
+  // excludes the hosted "vhs" relay, so it can't always honour the global value.
+  // It keeps a LOCAL selection that INITIALISES from the shared provider (when
+  // usable here) and REPORTS BACK to it on change — so picking a provider here
+  // still becomes the app's current provider, without ever forcing the global to
+  // a value (vhs) that this flow can't represent.
+  activeProvider: Provider;
+  setActiveProvider: (p: Provider) => void;
   showToast: (m: string) => void;
   onTemplatesLearned: () => void;
 }) {
@@ -1026,8 +1188,12 @@ function FormatLearningOption({
   const usableProviders = LEARN_PROVIDERS.filter((p) =>
     configuredProviders.includes(p),
   );
-  const [provider, setProvider] = useState<Provider>(
-    usableProviders[0] ?? "anthropic",
+  // Seed from the shared provider when it's usable here; otherwise fall back to
+  // this flow's first usable provider (without touching the global).
+  const [provider, setProvider] = useState<Provider>(() =>
+    usableProviders.includes(activeProvider)
+      ? activeProvider
+      : usableProviders[0] ?? "anthropic",
   );
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
@@ -1035,6 +1201,23 @@ function FormatLearningOption({
   const [outcomes, setOutcomes] = useState<LearnOutcome[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Report the local choice back to the shared provider whenever it's a value
+  // the global can hold (i.e. usable here). Keeps "choosing a provider in one
+  // place = the app's current provider everywhere" true for this flow too.
+  const handleProviderChange = (p: Provider) => {
+    setProvider(p);
+    setActiveProvider(p);
+  };
+
+  // Adopt the shared provider when it changes elsewhere AND is usable here, so
+  // the picker tracks the app's current provider. Otherwise keep the local one.
+  useEffect(() => {
+    if (usableProviders.includes(activeProvider) && activeProvider !== provider) {
+      setProvider(activeProvider);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProvider]);
 
   // Keep the selected provider valid as keys get added/removed elsewhere.
   useEffect(() => {
@@ -1182,7 +1365,7 @@ function FormatLearningOption({
             <select
               className="kn-input kn-input--select"
               value={provider}
-              onChange={(e) => setProvider(e.target.value as Provider)}
+              onChange={(e) => handleProviderChange(e.target.value as Provider)}
               disabled={busy}
             >
               {LEARN_PROVIDERS.map((p) => {
@@ -1456,7 +1639,7 @@ function LocalModelOption({
   showToast: (m: string) => void;
 }) {
   const [baseUrl, setBaseUrl] = useState("http://localhost:11434");
-  const [model, setModel] = useState("llama3.2");
+  const [model, setModel] = useState(() => readLocalModelName() ?? "llama3.2");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
 
@@ -1467,6 +1650,12 @@ function LocalModelOption({
         baseUrl: baseUrl.trim(),
         model: model.trim(),
       });
+      // Mirror the model name to localStorage so the sidebar indicator can show
+      // it without a Keychain read (the canonical copy lives in the Keychain via
+      // save_local_config, but reading that pops a password prompt at startup).
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.setItem(LOCAL_MODEL_KEY, model.trim());
+      }
       await refresh();
       showToast("Local config saved");
     } catch (e) {
@@ -1740,20 +1929,27 @@ function VhsHostedOption({
 function QuickMemo({
   onBack,
   configuredProviders,
+  activeProvider,
+  setActiveProvider,
   showToast,
   onUsageChange,
   onSaveToDeal,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
+  // Shared app-level provider (read/write). This flow uses every BYO/local/VHS
+  // provider, so the shared value is usable as-is — no per-flow clamp needed
+  // beyond App's global clamp.
+  activeProvider: Provider;
+  setActiveProvider: (p: Provider) => void;
   showToast: (m: string) => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
   onUsageChange?: () => void;
   // Fold the finished memo into a deal (new or existing).
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
-  const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
-  const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
+  const provider = activeProvider;
+  const setProvider = setActiveProvider;
   const [template, setTemplate] = useState<MemoTemplate>("simple-memo");
   const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
@@ -1958,20 +2154,25 @@ function QuickMemo({
 function IcReport({
   onBack,
   configuredProviders,
+  activeProvider,
+  setActiveProvider,
   showToast,
   onUsageChange,
   onSaveToDeal,
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
+  // Shared app-level provider (read/write). Usable as-is for IC reports.
+  activeProvider: Provider;
+  setActiveProvider: (p: Provider) => void;
   showToast: (m: string) => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
   onUsageChange?: () => void;
   // Fold the compiled IC memo into a deal (new or existing).
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
-  const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
-  const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
+  const provider = activeProvider;
+  const setProvider = setActiveProvider;
   const [template, setTemplate] = useState<IcTemplate>("simple-ic");
   const [stage, setStage] = useState<Stage>("");
   const [mode, setMode] = useState<SourceMode>("url");
@@ -2554,6 +2755,8 @@ function TemplateEditor({
 function TemplateGallery({
   onBack,
   configuredProviders,
+  activeProvider,
+  setActiveProvider,
   showToast,
   initialTemplateId,
   clearInitialTemplate,
@@ -2563,6 +2766,9 @@ function TemplateGallery({
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
+  // Shared app-level provider (read/write), forwarded to GenerateFromTemplate.
+  activeProvider: Provider;
+  setActiveProvider: (p: Provider) => void;
   showToast: (m: string) => void;
   // When the sidebar Templates list is clicked, the gallery jumps straight to
   // the generate flow for that template id. Cleared once consumed.
@@ -2632,6 +2838,8 @@ function TemplateGallery({
       <GenerateFromTemplate
         template={selected}
         configuredProviders={configuredProviders}
+        activeProvider={activeProvider}
+        setActiveProvider={setActiveProvider}
         showToast={showToast}
         onClose={() => setMode("browse")}
         onUsageChange={onUsageChange}
@@ -2722,6 +2930,8 @@ function TemplateGallery({
 function GenerateFromTemplate({
   template,
   configuredProviders,
+  activeProvider,
+  setActiveProvider,
   showToast,
   onClose,
   onUsageChange,
@@ -2729,6 +2939,9 @@ function GenerateFromTemplate({
 }: {
   template: Template;
   configuredProviders: Provider[];
+  // Shared app-level provider (read/write). Usable as-is for template runs.
+  activeProvider: Provider;
+  setActiveProvider: (p: Provider) => void;
   showToast: (m: string) => void;
   onClose: () => void;
   // Called after a successful hosted generation so the usage gauge refreshes.
@@ -2736,8 +2949,8 @@ function GenerateFromTemplate({
   // Fold the finished template report into a deal (new or existing).
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
-  const cloudFirst = configuredProviders.find((p) => p !== "local") ?? configuredProviders[0];
-  const [provider, setProvider] = useState<Provider>(cloudFirst ?? "anthropic");
+  const provider = activeProvider;
+  const setProvider = setActiveProvider;
   const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");

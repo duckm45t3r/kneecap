@@ -149,6 +149,35 @@ a:hover {
   color: var(--vhs-gold);
 }
 
+/* Active provider + model indicator — sits directly under the logo. Provider on
+   one line, the model name dimmed underneath. Editorial mono styling matching
+   the sidebar eyebrows; all colours are theme tokens (ink/paper aware). */
+.kn-sidebar-active-llm {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-sidebar-active-llm-provider {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper-dim);
+}
+
+.kn-sidebar-active-llm-model {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--vhs-paper-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .kn-sidebar-nav {
   display: flex;
   flex-direction: column;
