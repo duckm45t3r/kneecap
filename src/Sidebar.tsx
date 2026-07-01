@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import type { DealListRow } from "./deals/dealStore";
 import type { Template } from "./templates/types";
 import { isStarter } from "./templates/templateStore";
+import { useT } from "./i18n";
+import type { MessageKey } from "./i18n/messages";
 
 // Persistent left column (P1 keystone). Three stacked sections:
 //   1. Primary nav — the flows that were previously only reachable from Home
@@ -32,12 +34,12 @@ function timeAgo(iso: string): string {
   return new Date(ms).toLocaleDateString();
 }
 
-const NAV_ITEMS: { id: SidebarNav; label: string; emoji: string }[] = [
-  { id: "templates", label: "New report", emoji: "✎" },
-  { id: "quickmemo", label: "Quick Memo", emoji: "⚡" },
-  { id: "icreport", label: "Full IC Report", emoji: "📊" },
-  { id: "templates", label: "Templates", emoji: "▦" },
-  { id: "settings", label: "Settings", emoji: "⚙" },
+const NAV_ITEMS: { id: SidebarNav; labelKey: MessageKey; emoji: string }[] = [
+  { id: "templates", labelKey: "nav.newReport", emoji: "✎" },
+  { id: "quickmemo", labelKey: "nav.quickMemo", emoji: "⚡" },
+  { id: "icreport", labelKey: "nav.icReport", emoji: "📊" },
+  { id: "templates", labelKey: "nav.templates", emoji: "▦" },
+  { id: "settings", labelKey: "nav.settings", emoji: "⚙" },
 ];
 
 export function Sidebar({
@@ -73,6 +75,8 @@ export function Sidebar({
   // Compact ink/paper theme toggle, rendered in the footer. Always present.
   themeSlot?: ReactNode;
 }) {
+  // `tr` (not `t`) — `t` is already used for the template in the map below.
+  const { t: tr } = useT();
   return (
     <aside className="kn-sidebar">
       <button className="kn-sidebar-logo" onClick={() => onNavigate("home")} title="Home">
@@ -101,20 +105,18 @@ export function Sidebar({
             onClick={() => onNavigate(item.id)}
           >
             <span className="kn-sidebar-link-emoji">{item.emoji}</span>
-            {item.label}
+            {tr(item.labelKey)}
           </button>
         ))}
       </nav>
 
       <div className="kn-sidebar-section">
         <div className="kn-sidebar-heading">
-          Reports
+          {tr("sidebar.reports")}
           <span className="kn-sidebar-count">{deals.length}</span>
         </div>
         {deals.length === 0 ? (
-          <p className="kn-sidebar-empty">
-            No reports yet. Generate one and hit “Save to report”.
-          </p>
+          <p className="kn-sidebar-empty">{tr("sidebar.noReports")}</p>
         ) : (
           <ul className="kn-sidebar-list">
             {deals.map((d) => (
@@ -130,12 +132,14 @@ export function Sidebar({
                   title={d.deal.name}
                 >
                   <span className="kn-sidebar-report-title">
-                    {d.deal.name || "Untitled report"}
+                    {d.deal.name || tr("sidebar.untitledReport")}
                   </span>
                   <span className="kn-sidebar-report-meta">
-                    {d.latest_seq > 0 ? `v${d.latest_seq}` : "no versions"}
+                    {d.latest_seq > 0 ? `v${d.latest_seq}` : tr("sidebar.noVersions")}
                     {d.source_count > 0
-                      ? ` · ${d.source_count} source${d.source_count === 1 ? "" : "s"}`
+                      ? ` · ${d.source_count} ${
+                          d.source_count === 1 ? tr("sidebar.source") : tr("sidebar.sources")
+                        }`
                       : ""}
                     {d.updated_at ? ` · ${timeAgo(d.updated_at)}` : ""}
                   </span>
@@ -147,14 +151,14 @@ export function Sidebar({
       </div>
 
       <div className="kn-sidebar-section">
-        <div className="kn-sidebar-heading">Templates</div>
+        <div className="kn-sidebar-heading">{tr("sidebar.templatesHeading")}</div>
         <ul className="kn-sidebar-list">
           {templates.map((t) => (
             <li key={t.id} className="kn-sidebar-tpl">
               <button
                 className="kn-sidebar-tpl-main"
                 onClick={() => onGenerateTemplate(t.id)}
-                title={`Generate from ${t.name}`}
+                title={`${tr("sidebar.generateFrom")} ${t.name}`}
               >
                 <span className="kn-sidebar-tpl-name">{t.name}</span>
                 <span
@@ -162,7 +166,7 @@ export function Sidebar({
                     isStarter(t.id) ? "kn-sidebar-tpl-badge--starter" : "kn-sidebar-tpl-badge--custom"
                   }`}
                 >
-                  {isStarter(t.id) ? "starter" : "custom"}
+                  {isStarter(t.id) ? tr("badge.starter") : tr("badge.custom")}
                 </span>
               </button>
             </li>
@@ -175,7 +179,7 @@ export function Sidebar({
           {usageSlot}
           {themeSlot && (
             <div className="kn-sidebar-theme">
-              <span className="kn-sidebar-theme-label">Theme</span>
+              <span className="kn-sidebar-theme-label">{tr("sidebar.theme")}</span>
               {themeSlot}
             </div>
           )}

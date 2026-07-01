@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import { ChartRenderer, type ChartSpec } from "./ChartRenderer";
 import { BlockView } from "./templates/BlockView";
 import { TemplateDesigner } from "./templates/TemplateDesigner";
+import { useT } from "./i18n";
+import { LangToggle } from "./i18n/LangToggle";
 import {
   getAllTemplates,
   isStarter,
@@ -783,10 +785,12 @@ function App() {
               ? "templates"
               : null;
 
+  const { t } = useT();
+
   return (
     <div className="kn-app">
       <header className="kn-header">
-        <button className="kn-logo" onClick={goHome} title="Home">
+        <button className="kn-logo" onClick={goHome} title={t("header.home")}>
           KN33C4P
         </button>
         <span className="kn-beta" title="Beta release">beta</span>
@@ -794,8 +798,8 @@ function App() {
         <button
           className="kn-icon-btn"
           onClick={() => handleNavigate("settings")}
-          title="Settings"
-          aria-label="Settings"
+          title={t("header.settings")}
+          aria-label={t("header.settings")}
         >
           <SettingsIcon />
         </button>
@@ -1158,15 +1162,17 @@ function Settings({
   onOpenTemplateEditor: () => void;
   onTemplatesLearned: () => void;
 }) {
+  const { t } = useT();
+
   return (
     <div className="kn-settings">
       <button className="kn-back" onClick={onBack}>
-        ← Back
+        {t("common.back")}
       </button>
-      <h2 className="kn-settings-title">Settings</h2>
+      <h2 className="kn-settings-title">{t("settings.title")}</h2>
 
       <section className="kn-section">
-        <h3 className="kn-section-title">Appearance</h3>
+        <h3 className="kn-section-title">{t("settings.appearance")}</h3>
         <p className="kn-section-body">
           Switch between the dark <strong>Ink</strong> theme and the light{" "}
           <strong>Paper</strong> theme. Your choice is remembered on this Mac.
@@ -1175,7 +1181,13 @@ function Settings({
       </section>
 
       <section className="kn-section">
-        <h3 className="kn-section-title">LLM Connection</h3>
+        <h3 className="kn-section-title">{t("settings.language")}</h3>
+        <p className="kn-section-body">{t("settings.languageBody")}</p>
+        <LangToggle />
+      </section>
+
+      <section className="kn-section">
+        <h3 className="kn-section-title">{t("settings.llmConnection")}</h3>
         <p className="kn-section-body">
           Pick how KN33C4P talks to a model. Costs metered to your account or
           machine. Bring your own key, run a local model, or link your VHS
@@ -1208,7 +1220,7 @@ function Settings({
       </section>
 
       <section className="kn-section">
-        <h3 className="kn-section-title">Template Editor (W3.2 R7)</h3>
+        <h3 className="kn-section-title">{t("settings.templateEditor")}</h3>
         <p className="kn-section-body">
           Override the built-in prompt for any template / section combination.
           Your customisations stay on this Mac (localStorage); empty fields
@@ -1221,7 +1233,7 @@ function Settings({
       </section>
 
       <section className="kn-section">
-        <h3 className="kn-section-title">Format Learning</h3>
+        <h3 className="kn-section-title">{t("settings.formatLearning")}</h3>
         <p className="kn-section-body">
           Drop a few of your firm&apos;s past memos or decks and KN33C4P studies
           each one, then rebuilds it as a template in your house format — section
@@ -1237,7 +1249,7 @@ function Settings({
       </section>
 
       <section className="kn-section">
-        <h3 className="kn-section-title">About</h3>
+        <h3 className="kn-section-title">{t("settings.about")}</h3>
         <p className="kn-section-body">
           KN33C4P · desktop IC copilot · built by{" "}
           <a href="https://vhs.capital" target="_blank" rel="noreferrer">

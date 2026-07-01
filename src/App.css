@@ -2875,3 +2875,26 @@ a:hover {
   align-self: center;
   line-height: 1.5;
 }
+
+/* W7 — language switcher (EN / 中 / 日) */
+.kn-lang-toggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 2px;
+}
+.kn-lang-btn {
+  min-width: 34px;
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--vhs-paper-mute);
+  font-size: 12.5px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.kn-lang-btn--on { background: var(--vhs-ink-4); color: var(--vhs-paper); }
+.kn-lang-btn:hover { color: var(--vhs-paper); }
