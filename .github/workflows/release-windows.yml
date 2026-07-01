@@ -1,0 +1,58 @@
+name: Release (Windows)
+
+# Trigger: tag push matching v*. e.g. `git tag v0.1.0-beta.win && git push --tags`
+# emits an NSIS installer + attaches to a GitHub Release. macOS builds are still
+# manual (see BUILD.md) — this workflow only handles Windows so we don't touch
+# the notarised Mac path that Wei already ships by hand.
+#
+# Unsigned build. Windows SmartScreen warns on first launch; the /tools/kneecap
+# landing page explains the "More info → Run anyway" workaround.
+#
+# If TAURI_SIGNING_PRIVATE_KEY isn't set as a repo secret, tauri-action skips
+# the updater signature step but the .exe still builds fine. Same for
+# WINDOWS_CERTIFICATE — absent = unsigned installer.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # tauri-action needs write to create/update the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build & release (Tauri)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'KN33C4P ${{ github.ref_name }} (Windows beta)'
+          releaseBody: |
+            Windows beta build. Unsigned — Windows SmartScreen will warn on first launch.
+            Click "More info" → "Run anyway" to install.
+
+            macOS builds are notarised and shipped separately from /tools/kneecap.
+          releaseDraft: false
+          prerelease: true
+          args: --target x86_64-pc-windows-msvc

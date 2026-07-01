@@ -194,3 +194,85 @@ Settings is a small follow-up.
 - [ ] Export Apple notarization secrets (`APPLE_ID` / `APPLE_PASSWORD` /
       `APPLE_TEAM_ID`) before `npx tauri build`.
 - [ ] Keep `~/.tauri/kneecap.key` (private updater key) backed up + secret.
+
+---
+
+## 6. Windows build (beta, unsigned)
+
+Windows uses a different path: builds run in **GitHub Actions**
+(`.github/workflows/release-windows.yml`) on `windows-latest`, driven by tag
+pushes. Mac stays manual on your laptop; the two do not share signing state.
+
+### 6.1 Trigger a Windows release
+
+```bash
+# From the branch you want to ship (e.g. kneecap-w7-template-studio):
+git tag v0.1.0-beta.win        # any tag matching v* triggers the workflow
+git push origin v0.1.0-beta.win
+```
+
+Watch the run at `https://github.com/duckm45t3r/kneecap/actions`. On success
+(~10-15 min) a **pre-release** appears at
+`https://github.com/duckm45t3r/kneecap/releases/tag/v0.1.0-beta.win` with
+`KN33C4P_0.1.0_x64-setup.exe` attached.
+
+### 6.2 Local Windows build (fallback)
+
+If Actions is down or you want to iterate locally on a Windows machine:
+
+```powershell
+# One-time toolchain
+winget install --id Microsoft.VisualStudio.2022.BuildTools     # C++ build tools
+winget install --id Rustlang.Rustup
+winget install --id OpenJS.NodeJS.LTS
+rustup target add x86_64-pc-windows-msvc
+
+# Build
+git clone https://github.com/duckm45t3r/kneecap
+cd kneecap
+npm ci
+npx tauri build
+# Output: src-tauri\target\release\bundle\nsis\KN33C4P_0.1.0_x64-setup.exe
+```
+
+WebView2 runtime is bundled via `webviewInstallMode: downloadBootstrapper` —
+first-launch users without WebView2 get a silent MS bootstrapper install.
+
+### 6.3 SmartScreen (unsigned .exe caveat)
+
+Beta builds are unsigned. On download + first run, Windows shows:
+
+> **Microsoft Defender SmartScreen prevented an unrecognized app from starting.**
+
+The `/tools/kneecap` landing page tells users:
+`More info → Run anyway`. This is documented on the download page so it's not a
+surprise.
+
+### 6.4 Upgrading to signed later
+
+Two options when we're ready to remove the SmartScreen warning:
+
+- **EV code-signing cert** (~$300-500/yr, hardware token). Store the cert as a
+  base64 GitHub secret `WINDOWS_CERTIFICATE` + password `WINDOWS_CERTIFICATE_PASSWORD`.
+  tauri-action picks them up automatically.
+- **Azure Trusted Signing** (monthly, no hardware token). Requires an Azure
+  tenant + `AzureSignTool` step in the workflow.
+
+Neither is wired up right now.
+
+### 6.5 Windows updater
+
+Currently disabled for Windows — the updater `latest.json` only carries a
+`darwin-aarch64` entry when Mac ships it. To enable Windows auto-update later:
+
+1. Add `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as
+   repo secrets (same minisign keypair Mac uses).
+2. In the release's `latest.json`, add:
+   ```json
+   "windows-x86_64": {
+     "signature": "<contents of KN33C4P_0.1.0_x64-setup.nsis.zip.sig>",
+     "url": "https://github.com/duckm45t3r/kneecap/releases/download/v0.1.0/KN33C4P_0.1.0_x64-setup.nsis.zip"
+   }
+   ```
+3. tauri-action will emit `.nsis.zip` + `.nsis.zip.sig` when the private key is
+   present.
