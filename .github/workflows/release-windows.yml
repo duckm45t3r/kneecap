@@ -55,10 +55,12 @@ jobs:
             macOS builds are notarised and shipped separately from /tools/kneecap.
           releaseDraft: false
           prerelease: true
-          # -c overrides createUpdaterArtifacts for this build only. The updater
-          # plugin's pubkey in tauri.conf.json is a placeholder; without the
-          # matching private key as a repo secret, tauri build errors after
-          # producing the .exe. Beta ships without updater signing (per plan);
-          # when we later wire up auto-updates, remove this -c and add
-          # TAURI_SIGNING_PRIVATE_KEY / _PASSWORD as secrets.
-          args: --target x86_64-pc-windows-msvc -c "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
+          # -c merges src-tauri/tauri.windows.ci.conf.json into tauri.conf.json
+          # for this build only. That file disables createUpdaterArtifacts so
+          # tauri doesn't try to sign the updater payload (the placeholder
+          # pubkey in tauri.conf.json has no matching private key on the runner).
+          # Beta ships without updater signing (per plan); when we later wire
+          # up auto-updates, drop this override and add TAURI_SIGNING_PRIVATE_KEY
+          # / _PASSWORD as repo secrets. Inline JSON tripped Windows shell
+          # escaping — a file path is the reliable form.
+          args: --target x86_64-pc-windows-msvc -c src-tauri/tauri.windows.ci.conf.json
