@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    KN33C4P hardened-runtime entitlements for macOS notarization (W5).
+
+    Notarization requires the Hardened Runtime. The WKWebView that Tauri uses
+    JITs JavaScript, so the two JIT entitlements below are required or the app
+    crashes on launch under the hardened runtime. These are the standard Tauri
+    macOS entitlements — nothing app-specific is granted.
+
+    We deliberately do NOT add com.apple.security.app-sandbox: KN33C4P needs
+    outbound network (Anthropic / OpenAI / Gemini / VHS proxy / Ollama) and
+    Keychain access, which the App Sandbox would constrain. Developer ID +
+    notarization (NOT Mac App Store) is the distribution path, so the sandbox
+    entitlement is not required.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

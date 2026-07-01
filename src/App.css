@@ -89,14 +89,288 @@ a:hover {
   background: var(--vhs-ink-3);
 }
 
+/* ── Body (sidebar + main) ───────────────────────────────────────── */
+
+.kn-body {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 
 .kn-main {
   flex: 1;
-  padding: 56px 64px;
-  max-width: 920px;
+  padding: 48px 56px;
   width: 100%;
-  margin: 0 auto;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* Inner content stays in a readable column even with the sidebar present.
+   The template designer (.kn-ed) opts out — its 3-column grid needs the
+   full width. */
+.kn-main > *:not(.kn-ed) {
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ── Persistent sidebar (P1) ─────────────────────────────────────── */
+
+.kn-sidebar {
+  width: 256px;
+  flex-shrink: 0;
+  background: var(--vhs-ink-2);
+  border-right: 1px solid var(--vhs-hairline);
+  padding: 18px 14px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.kn-sidebar-logo {
+  background: none;
+  border: 0;
+  color: var(--vhs-paper);
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 18px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-sidebar-logo:hover {
+  color: var(--vhs-gold);
+}
+
+/* Active provider + model indicator — sits directly under the logo. Provider on
+   one line, the model name dimmed underneath. Editorial mono styling matching
+   the sidebar eyebrows; all colours are theme tokens (ink/paper aware). */
+.kn-sidebar-active-llm {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-sidebar-active-llm-provider {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper-dim);
+}
+
+.kn-sidebar-active-llm-model {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--vhs-paper-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kn-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--vhs-paper-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kn-sidebar-link:hover {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+}
+
+.kn-sidebar-link--active {
+  background: rgba(212, 183, 106, 0.1);
+  color: var(--vhs-gold);
+}
+
+.kn-sidebar-link-emoji {
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.kn-sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-sidebar-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+  padding: 0 10px;
+  margin-bottom: 2px;
+}
+
+.kn-sidebar-count {
+  font-size: 9.5px;
+  color: var(--vhs-paper-faint);
+  background: var(--vhs-ink-3);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.kn-sidebar-empty {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vhs-paper-faint);
+  padding: 2px 10px 4px;
+  margin: 0;
+}
+
+.kn-sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.kn-sidebar-report,
+.kn-sidebar-tpl {
+  display: flex;
+  align-items: stretch;
+  border-radius: 6px;
+}
+
+.kn-sidebar-report--active {
+  background: rgba(212, 183, 106, 0.1);
+}
+
+.kn-sidebar-report-main,
+.kn-sidebar-tpl-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: none;
+  border: 0;
+  text-align: left;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--vhs-paper-dim);
+  font: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kn-sidebar-report-main:hover,
+.kn-sidebar-tpl-main:hover {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+}
+
+.kn-sidebar-report--active .kn-sidebar-report-main {
+  color: var(--vhs-paper);
+}
+
+.kn-sidebar-report-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-sidebar-report-meta {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-sidebar-report-del {
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 9px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.kn-sidebar-report-del:hover {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.1);
+}
+
+.kn-sidebar-tpl-main {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kn-sidebar-tpl-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-sidebar-tpl-badge {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.kn-sidebar-tpl-badge--starter {
+  color: var(--vhs-paper-faint);
+  border: 1px solid var(--vhs-hairline);
+}
+
+.kn-sidebar-tpl-badge--custom {
+  color: var(--vhs-gold);
+  border: 1px solid var(--vhs-gold-dim);
 }
 
 /* ── Home view ───────────────────────────────────────────────────── */
@@ -513,6 +787,37 @@ a:hover {
   border: 1px solid rgba(192, 80, 70, 0.3);
 }
 
+.kn-form-feedback--muted {
+  color: var(--vhs-paper-dim);
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+}
+
+/* ── VHS-hosted device-code bind (W4) ──────────────────────────────── */
+
+.kn-pill--ok {
+  color: var(--vhs-teal);
+  background: rgba(61, 191, 174, 0.1);
+  border-color: rgba(61, 191, 174, 0.4);
+}
+
+.kn-device-code {
+  margin: 10px 0;
+  padding: 12px 16px;
+  text-align: center;
+  font-family: var(--vhs-mono, monospace);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  color: var(--vhs-paper);
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  /* Pad the left so the wide letter-spacing stays visually centred. */
+  text-indent: 0.32em;
+  user-select: all;
+}
+
 /* ── Connected provider list ───────────────────────────────────────── */
 
 .kn-key-list {
@@ -594,6 +899,73 @@ a:hover {
   background: var(--vhs-crimson-dim);
 }
 
+/* ── Per-provider enable/disable toggle ────────────────────────────────
+   Small on/off switch beside a connected provider. Pushed to the right of the
+   row; the Remove/Unlink link (which carries margin-left:auto) then sits to its
+   right. When a provider has no Remove link (local / vhs), this still aligns
+   right via its own margin-left:auto. */
+.kn-provider-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--vhs-paper-dim);
+}
+
+/* When a Remove/Unlink link follows the toggle, that link owns margin-left:auto,
+   so the toggle should not also push — reset it in that case. */
+.kn-provider-toggle:not(:last-child) {
+  margin-left: 0;
+}
+
+.kn-provider-toggle-track {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  transition: background 0.15s ease, border-color 0.15s ease;
+  flex: none;
+}
+
+.kn-provider-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--vhs-paper-faint);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.kn-provider-toggle--on .kn-provider-toggle-track {
+  background: var(--vhs-teal);
+  border-color: var(--vhs-teal);
+}
+
+.kn-provider-toggle--on .kn-provider-toggle-thumb {
+  transform: translateX(14px);
+  background: var(--vhs-ink-1, #0b0e11);
+}
+
+.kn-provider-toggle-text {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  min-width: 20px;
+  text-align: left;
+}
+
+.kn-provider-toggle--on .kn-provider-toggle-text {
+  color: var(--vhs-teal);
+}
+
 /* ── Flow views (Quick Memo, IC Report) ─────────────────────────────── */
 
 .kn-flow {
@@ -626,6 +998,19 @@ a:hover {
   border-radius: 6px;
   padding: 8px 12px;
   margin: 0 0 18px;
+}
+
+/* ── Advisory banner (text-only provider + PDF) ───────────────────── */
+/* Amber, non-blocking — distinct from the crimson hard disclaimer. */
+.kn-advisory {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--vhs-gold, #b8860b);
+  background: rgba(196, 152, 58, 0.09);
+  border: 1px solid rgba(196, 152, 58, 0.35);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 12px 0 0;
 }
 
 /* ── Source picker (URL vs paste tab) ──────────────────────────────── */
@@ -1048,6 +1433,706 @@ a:hover {
   border-radius: 8px;
 }
 
+/* ─── Template gallery (wave 3.3 starter reference) ──────────────────── */
+
+.kn-card--wide {
+  grid-column: span 2;
+}
+
+.kn-tpl-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+
+.kn-tpl-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  color: var(--vhs-paper-mute);
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.kn-tpl-tab:hover {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+}
+
+.kn-tpl-tab--active {
+  border-color: var(--vhs-gold-dim);
+  color: var(--vhs-paper);
+}
+
+.kn-tpl-tab-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.kn-tpl-tab-meta {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--vhs-paper-faint);
+}
+
+.kn-tpl-tab--active .kn-tpl-tab-meta {
+  color: var(--vhs-gold-dim);
+}
+
+.kn-tpl-desc {
+  font-size: 13px;
+  color: var(--vhs-paper-mute);
+  margin: 0 0 14px;
+}
+
+.kn-tpl-page {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 10px;
+  padding: 26px 30px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px 16px;
+}
+
+.kn-tpl-block--full {
+  flex: 1 1 100%;
+}
+
+.kn-tpl-block--half {
+  flex: 1 1 calc(50% - 8px);
+}
+
+.kn-tpl-eyebrow {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+  margin-bottom: 7px;
+}
+
+.kn-tpl-h {
+  line-height: 1.2;
+  margin: 0;
+}
+
+.kn-tpl-p {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--vhs-paper-dim);
+  margin: 0;
+}
+
+.kn-tpl-ghost {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--vhs-paper-faint);
+  font-style: italic;
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px dashed var(--vhs-hairline);
+}
+
+.kn-tpl-ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kn-tpl-ul li {
+  position: relative;
+  padding-left: 18px;
+  margin-bottom: 6px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--vhs-paper-dim);
+}
+
+.kn-tpl-ul li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--vhs-gold);
+}
+
+.kn-tpl-ul--crimson li::before {
+  background: var(--vhs-crimson);
+}
+
+.kn-tpl-ul--teal li::before {
+  background: var(--vhs-teal);
+}
+
+.kn-tpl-ul--paper li::before {
+  background: var(--vhs-paper-dim);
+}
+
+.kn-tpl-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.kn-tpl-metric {
+  flex: 1 1 0;
+  min-width: 90px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+
+.kn-tpl-metric-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+  margin-bottom: 5px;
+}
+
+.kn-tpl-metric-value {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--vhs-paper);
+  font-variant-numeric: tabular-nums;
+}
+
+.kn-tpl-chart {
+  width: 100%;
+}
+
+.kn-tpl-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  height: 130px;
+  padding: 6px 4px 0;
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-tpl-bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 6px;
+}
+
+.kn-tpl-bar {
+  width: 100%;
+  max-width: 64px;
+  background: var(--vhs-teal-deep);
+  border-radius: 3px 3px 0 0;
+  min-height: 4px;
+}
+
+.kn-tpl-bar-col:first-child .kn-tpl-bar {
+  background: var(--vhs-gold);
+}
+
+.kn-tpl-bar-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-tpl-caption {
+  font-size: 11px;
+  color: var(--vhs-paper-faint);
+  margin-top: 7px;
+}
+
+.kn-tpl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.kn-tpl-table th,
+.kn-tpl-table td {
+  border: 1px solid var(--vhs-hairline);
+  padding: 7px 11px;
+  text-align: left;
+}
+
+.kn-tpl-table th {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.kn-tpl-table td {
+  color: var(--vhs-paper-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.kn-tpl-score {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(61, 191, 174, 0.06);
+  border: 1px solid rgba(61, 191, 174, 0.3);
+  border-radius: 8px;
+  padding: 14px 18px;
+}
+
+.kn-tpl-score-num {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--vhs-teal);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.kn-tpl-score-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+  margin-bottom: 3px;
+}
+
+.kn-tpl-score-cap {
+  font-size: 13px;
+  color: var(--vhs-paper-dim);
+  line-height: 1.5;
+}
+
+.kn-tpl-logo {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px dashed var(--vhs-paper-faint);
+  border-radius: 5px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-tpl-hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--vhs-hairline);
+  margin: 0;
+}
+
+.kn-tpl-cover {
+  width: 100%;
+  text-align: center;
+  padding: 14px 0 18px;
+  border-bottom: 3px double var(--vhs-paper-faint);
+}
+
+.kn-tpl-cover-title {
+  margin: 0 0 8px;
+}
+
+.kn-tpl-cover-sub {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+}
+
+/* ─── Templates hub action bar ──────────────────────────────────────── */
+
+.kn-tpl-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0 0 14px;
+  width: 100%;
+}
+
+.kn-tpl-actionbar .kn-tpl-desc {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.kn-tpl-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ─── Template designer (editor) ────────────────────────────────────── */
+
+.kn-ed {
+  max-width: none;
+}
+
+.kn-ed-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.kn-ed-top .kn-back {
+  padding: 0;
+}
+
+.kn-ed-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.kn-ed-dirty {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+}
+
+.kn-ed-grid {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr) 240px;
+  gap: 16px;
+  align-items: start;
+}
+
+.kn-ed-side,
+.kn-ed-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 14px;
+  position: sticky;
+  top: 12px;
+}
+
+.kn-ed-side-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+  margin-top: 6px;
+}
+
+.kn-ed-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kn-ed-palette-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--vhs-paper-dim);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.kn-ed-palette-btn:hover {
+  background: var(--vhs-ink-4);
+  color: var(--vhs-paper);
+}
+
+.kn-ed-palette-icon {
+  width: 16px;
+  text-align: center;
+  color: var(--vhs-gold);
+}
+
+.kn-ed-field,
+.kn-ed-check {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 600;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-ed-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+  font-size: 12.5px;
+  color: var(--vhs-paper-dim);
+  cursor: pointer;
+}
+
+.kn-ed-field-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+  margin-top: 8px;
+}
+
+.kn-ed-style-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+/* minmax(0,1fr) + min-width:0 lets the columns shrink below the select's
+   min-content so the right column (SIZE / ACCENT / WIDTH) can't poke out past
+   the 240px inspector. The selects fill their column instead of overflowing. */
+.kn-ed-style-grid > * {
+  min-width: 0;
+}
+
+.kn-ed-style-grid select,
+.kn-ed-style-grid input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.kn-ed-seg {
+  display: flex;
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.kn-ed-seg-btn {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--vhs-paper-mute);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px;
+  cursor: pointer;
+}
+
+.kn-ed-seg-btn--on {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-gold);
+}
+
+/* Canvas */
+
+.kn-ed-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+}
+
+.kn-ed-empty,
+.kn-ed-inspector-empty {
+  font-size: 12.5px;
+  color: var(--vhs-paper-faint);
+  padding: 20px 4px;
+}
+
+.kn-ed-block {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.kn-ed-block--sel {
+  border-color: var(--vhs-gold-dim);
+  box-shadow: 0 0 0 1px var(--vhs-gold-dim);
+}
+
+.kn-ed-block--drag {
+  opacity: 0.45;
+}
+
+.kn-ed-block-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--vhs-ink-3);
+  border-bottom: 1px solid var(--vhs-hairline);
+}
+
+.kn-ed-grip {
+  color: var(--vhs-paper-faint);
+  cursor: grab;
+  font-size: 13px;
+  letter-spacing: -2px;
+}
+
+.kn-ed-block-type {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-ed-del {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-faint);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.kn-ed-del:hover {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.1);
+}
+
+.kn-ed-block-body {
+  padding: 14px 16px;
+}
+
+/* ─── Generation progress ───────────────────────────────────────────── */
+
+.kn-gen-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 18px 0 0;
+  padding: 12px 16px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+}
+
+.kn-gen-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-gen-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vhs-paper-faint);
+  flex-shrink: 0;
+}
+
+.kn-gen-step--done {
+  color: var(--vhs-paper);
+}
+
+.kn-gen-step--done .kn-gen-dot {
+  background: var(--vhs-teal);
+}
+
+.kn-gen-step--run {
+  color: var(--vhs-gold);
+}
+
+.kn-gen-step--run .kn-gen-dot {
+  background: var(--vhs-gold);
+  animation: kn-gen-pulse 1s ease-in-out infinite;
+}
+
+.kn-gen-run {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--vhs-gold-dim);
+}
+
+@keyframes kn-gen-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ─── Firm logo (PNG / SVG upload) ──────────────────────────────────── */
+
+.kn-tpl-logo-img {
+  max-height: 52px;
+  max-width: 240px;
+  object-fit: contain;
+  display: block;
+}
+
+.kn-ed-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kn-ed-logo-thumb {
+  max-height: 30px;
+  max-width: 84px;
+  object-fit: contain;
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: var(--vhs-ink-3);
+}
+
+.kn-ed-logo-name {
+  flex: 1;
+  font-size: 11px;
+  color: var(--vhs-paper-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-ed-logo-upload {
+  justify-content: center;
+  cursor: pointer;
+}
+
+.kn-ed-logo-msg {
+  font-size: 11px;
+  color: var(--vhs-crimson);
+  line-height: 1.4;
+}
+
 .kn-chart-title {
   font-family: "Cormorant Garamond", serif;
   font-size: 15px;
@@ -1062,4 +2147,564 @@ a:hover {
   background: rgba(192, 80, 70, 0.08);
   padding: 6px 10px;
   border-radius: 4px;
+}
+
+/* ── W5: hosted usage gauge ──────────────────────────────────────── */
+
+.kn-ed-palette-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.kn-ed-block-count {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--vhs-paper-dim);
+  margin-left: 8px;
+}
+
+.kn-ed-block-cap-note {
+  font-size: 11px;
+  color: var(--vhs-gold);
+  padding: 2px 2px 0;
+}
+
+.kn-home-usage {
+  margin-top: 28px;
+  max-width: 420px;
+}
+
+/* Sidebar footer pins the compact gauge to the bottom of the column. */
+.kn-sidebar-footer {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--vhs-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Theme toggle (ink / paper) ──────────────────────────────────── */
+
+.kn-theme-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 7px;
+}
+
+.kn-theme-toggle--full {
+  align-self: flex-start;
+}
+
+.kn-theme-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font: inherit;
+  font-family: var(--vhs-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.kn-theme-opt:hover {
+  color: var(--vhs-paper);
+}
+
+.kn-theme-opt--active {
+  background: var(--vhs-ink-4);
+  color: var(--vhs-paper);
+}
+
+.kn-theme-opt-glyph {
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Compact variant lives in the sidebar footer: icon-only, full-width row. */
+.kn-theme-toggle--compact {
+  display: flex;
+  width: 100%;
+}
+
+.kn-theme-toggle--compact .kn-theme-opt {
+  flex: 1;
+  padding: 6px 0;
+}
+
+.kn-sidebar-theme {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-sidebar-theme-label {
+  font-family: var(--vhs-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--vhs-paper-mute);
+}
+
+.kn-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kn-usage--panel {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 16px 18px;
+}
+
+.kn-usage--compact {
+  gap: 6px;
+}
+
+.kn-usage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kn-usage-eyebrow {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+}
+
+.kn-usage-help {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--vhs-hairline);
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.kn-usage-help:hover {
+  color: var(--vhs-paper);
+  border-color: var(--vhs-gold-dim);
+}
+
+.kn-usage-count {
+  font-size: 13px;
+  color: var(--vhs-paper-dim);
+}
+
+.kn-usage-count strong {
+  color: var(--vhs-paper);
+}
+
+.kn-usage--compact .kn-usage-count {
+  font-size: 12px;
+}
+
+.kn-usage-month {
+  color: var(--vhs-paper-faint);
+}
+
+.kn-usage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  overflow: hidden;
+}
+
+.kn-usage-bar-fill {
+  height: 100%;
+  background: var(--vhs-teal);
+  transition: width 0.3s ease;
+}
+
+.kn-usage-bar-fill--full {
+  background: var(--vhs-gold);
+}
+
+.kn-usage-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--vhs-paper-faint);
+}
+
+.kn-usage--compact .kn-usage-note {
+  font-size: 11px;
+}
+
+.kn-usage-note--limit {
+  color: var(--vhs-gold);
+}
+
+/* ── W5: usage guide modal ───────────────────────────────────────── */
+
+.kn-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.kn-modal {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  padding: 24px 26px;
+}
+
+.kn-usage-guide {
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kn-usage-guide-title {
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper);
+  margin: 0;
+}
+
+.kn-usage-guide p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--vhs-paper-dim);
+  margin: 0;
+}
+
+.kn-usage-guide strong {
+  color: var(--vhs-paper);
+}
+
+.kn-usage-guide .kn-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.kn-btn--ghost {
+  background: transparent;
+}
+
+/* ── Format Learning ───────────────────────────────────────────────── */
+
+.kn-fl {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kn-fl-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-fl-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.kn-fl-file-name {
+  color: var(--vhs-paper);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-fl-file-x {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-mute);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.kn-fl-file-x:hover:not(:disabled) {
+  color: var(--vhs-crimson);
+}
+
+.kn-fl-file-x:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Deals + version history (W4/W5) ───────────────────────────────── */
+
+/* A danger button for destructive confirms (delete deal / version). */
+.kn-btn--danger {
+  background: rgba(192, 80, 70, 0.14);
+  color: var(--vhs-crimson);
+  border-color: rgba(192, 80, 70, 0.45);
+}
+
+.kn-btn--danger:hover:not(:disabled) {
+  background: var(--vhs-crimson);
+  color: var(--vhs-paper);
+  border-color: var(--vhs-crimson);
+}
+
+/* Header: name + rename/delete. */
+.kn-deal-header {
+  margin-bottom: 6px;
+}
+
+.kn-deal-title {
+  margin-bottom: 6px;
+}
+
+.kn-deal-header-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.kn-deal-rename {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.kn-deal-rename .kn-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Two side-by-side panels (sources | versions); stacks on narrow widths. */
+.kn-deal-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 16px;
+}
+
+@media (max-width: 880px) {
+  .kn-deal-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kn-deal-panel {
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.kn-deal-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.kn-deal-panel-title {
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  color: var(--vhs-paper);
+  margin: 0;
+}
+
+.kn-deal-panel-count {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--vhs-gold);
+  background: var(--vhs-ink-3);
+  border-radius: 10px;
+  padding: 1px 8px;
+  margin-left: 6px;
+}
+
+.kn-deal-panel-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vhs-paper-faint);
+  margin: 0 0 12px;
+}
+
+/* Sources list. */
+.kn-deal-source-list,
+.kn-deal-version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-deal-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.kn-deal-source-emoji {
+  font-size: 14px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.kn-deal-source-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.kn-deal-source-name {
+  font-size: 13px;
+  color: var(--vhs-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-deal-source-meta {
+  font-size: 11px;
+  color: var(--vhs-paper-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-deal-source-del {
+  background: none;
+  border: 0;
+  color: var(--vhs-paper-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.kn-deal-source-del:hover {
+  color: var(--vhs-crimson);
+  background: rgba(192, 80, 70, 0.1);
+}
+
+/* Add-source sub-form. */
+.kn-deal-addsource {
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Versions list. */
+.kn-deal-version {
+  display: flex;
+}
+
+.kn-deal-version-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--vhs-ink-3);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  padding: 9px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.kn-deal-version-main:hover {
+  background: var(--vhs-ink-4);
+  border-color: var(--vhs-ink-4);
+}
+
+.kn-deal-version-seq {
+  font-family: "Cormorant SC", "Cormorant Garamond", serif;
+  font-size: 20px;
+  letter-spacing: 0.03em;
+  color: var(--vhs-gold);
+  flex-shrink: 0;
+  width: 40px;
+}
+
+.kn-deal-version-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kn-deal-version-note {
+  font-size: 13px;
+  color: var(--vhs-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kn-deal-version-meta {
+  font-size: 11px;
+  color: var(--vhs-paper-faint);
+}
+
+/* New-version + save-to-deal modals: a bit wider than the usage guide. */
+.kn-deal-newversion,
+.kn-savedeal {
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }

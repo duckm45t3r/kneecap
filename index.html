@@ -5,6 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tauri + React + Typescript</title>
+    <!-- No-flash theme: apply the saved ink/paper theme before the bundle
+         loads, so the first paint is already on the right surface. Mirrors
+         src/theme.ts (key 'kneecap_theme', default 'ink' = no attribute). -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("kneecap_theme") === "paper") {
+            document.documentElement.setAttribute("data-theme", "paper");
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>
