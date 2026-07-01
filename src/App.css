@@ -2791,6 +2791,7 @@ a:hover {
   z-index: 2;
 }
 .kn-a4-block--interactive:hover .kn-a4-chrome { display: flex; }
+.kn-a4-block--drop { box-shadow: 0 0 0 2px var(--vhs-teal) !important; }
 .kn-a4-grip {
   color: var(--vhs-paper-faint);
   cursor: grab;
@@ -2799,7 +2800,10 @@ a:hover {
   background: var(--vhs-ink-3);
   border-radius: 4px;
   padding: 1px 4px;
+  touch-action: none;   /* let pointer-drag work without scroll interference */
+  user-select: none;
 }
+.kn-a4-grip:active { cursor: grabbing; }
 .kn-a4-del {
   background: var(--vhs-ink-3);
   color: var(--vhs-paper-mute);

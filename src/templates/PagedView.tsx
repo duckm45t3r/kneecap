@@ -48,11 +48,8 @@ export function PagedView({
   selectedId,
   onSelectBlock,
   blockChrome,
-  draggable = false,
   dragDocIndex = null,
-  onBlockDragStart,
-  onBlockDrop,
-  onBlockDragEnd,
+  dropDocIndex = null,
 }: {
   blocks: Block[];
   page: Template["page"];
@@ -64,14 +61,13 @@ export function PagedView({
   onSelectBlock?: (id: string) => void;
   /** Per-block chrome (drag grip, delete) the designer injects onto each block. */
   blockChrome?: (block: Block, docIndex: number) => ReactNode;
-  /** Drag-to-reorder (works across pages — it's one flat list). docIndex is the
-   *  block's position in the ORIGINAL blocks[], which the designer feeds to
-   *  moveBlock(from, to). */
-  draggable?: boolean;
+  /** Pointer-drag reorder styling. The drag itself is driven by the designer via
+   *  the grip's onPointerDown + data-doc-index hit-testing — HTML5 draggable is
+   *  intercepted by Tauri/WKWebView, so we don't use it. `dragDocIndex` = the
+   *  block being dragged; `dropDocIndex` = the current drop target. docIndex is
+   *  the block's position in the ORIGINAL blocks[]. */
   dragDocIndex?: number | null;
-  onBlockDragStart?: (docIndex: number) => void;
-  onBlockDrop?: (docIndex: number) => void;
-  onBlockDragEnd?: () => void;
+  dropDocIndex?: number | null;
 }) {
   const pages = splitIntoPages(blocks, keepEmptyPages);
   const interactive = typeof onSelectBlock === "function";
@@ -108,29 +104,21 @@ export function PagedView({
               pageBlocks.map((b) => {
                 const di = docIndexOf.get(b.id) ?? 0;
                 const sel = selectedId === b.id;
-                const isDragging = draggable && dragDocIndex === di;
+                const isDragging = dragDocIndex === di;
+                const isDropTarget =
+                  dropDocIndex === di && dragDocIndex !== null && dragDocIndex !== di;
                 return (
                   <div
                     key={b.id}
+                    data-doc-index={di}
                     className={
                       `kn-a4-block kn-a4-block--${b.width}` +
                       (interactive ? " kn-a4-block--interactive" : "") +
                       (sel ? " kn-a4-block--sel" : "") +
-                      (isDragging ? " kn-a4-block--drag" : "")
+                      (isDragging ? " kn-a4-block--drag" : "") +
+                      (isDropTarget ? " kn-a4-block--drop" : "")
                     }
                     onClick={interactive ? () => onSelectBlock?.(b.id) : undefined}
-                    draggable={draggable || undefined}
-                    onDragStart={draggable ? () => onBlockDragStart?.(di) : undefined}
-                    onDragOver={draggable ? (e) => e.preventDefault() : undefined}
-                    onDrop={
-                      draggable
-                        ? (e) => {
-                            e.preventDefault();
-                            onBlockDrop?.(di);
-                          }
-                        : undefined
-                    }
-                    onDragEnd={draggable ? () => onBlockDragEnd?.() : undefined}
                   >
                     {blockChrome?.(b, di)}
                     <BlockView block={b} firmLogo={firmLogo} />

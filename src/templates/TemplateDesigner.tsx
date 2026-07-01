@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import type {
   Block,
   BlockAccent,
@@ -53,6 +53,7 @@ export function TemplateDesigner({
   );
   const [dirty, setDirty] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [firmLogo, setFirmLogoState] = useState<FirmLogo | null>(() => getFirmLogo());
   const [logoMsg, setLogoMsg] = useState<string | null>(null);
 
@@ -128,6 +129,49 @@ export function TemplateDesigner({
     const [moved] = blocks.splice(from, 1);
     blocks.splice(to, 0, moved);
     mutate({ ...draft, blocks });
+  };
+
+  // ── Pointer-based block drag ──────────────────────────────────────────
+  // HTML5 `draggable` is swallowed by Tauri's WKWebView drag-drop handler, so
+  // reordering uses raw pointer events (unaffected by Tauri) + elementFromPoint
+  // to find the block under the cursor. dragIndex = block being dragged (dimmed);
+  // dropIndex = current target (highlighted). Works across pages — it's one list.
+  const dragFrom = useRef<number | null>(null);
+  const dragTo = useRef<number | null>(null);
+
+  const startBlockDrag = (from: number, e: ReactPointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragFrom.current = from;
+    dragTo.current = from;
+    setDragIndex(from);
+    setDropIndex(from);
+
+    const onMove = (ev: globalThis.PointerEvent) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const blockEl = (el as Element | null)?.closest?.(
+        "[data-doc-index]",
+      ) as HTMLElement | null;
+      if (!blockEl) return;
+      const idx = Number(blockEl.getAttribute("data-doc-index"));
+      if (!Number.isNaN(idx)) {
+        dragTo.current = idx;
+        setDropIndex(idx);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const from2 = dragFrom.current;
+      const to2 = dragTo.current;
+      dragFrom.current = null;
+      dragTo.current = null;
+      setDragIndex(null);
+      setDropIndex(null);
+      if (from2 !== null && to2 !== null && to2 !== from2) moveBlock(from2, to2);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   };
 
   const handleSave = () => {
@@ -272,17 +316,15 @@ export function TemplateDesigner({
             keepEmptyPages
             selectedId={selectedId}
             onSelectBlock={setSelectedId}
-            draggable
             dragDocIndex={dragIndex}
-            onBlockDragStart={(i) => setDragIndex(i)}
-            onBlockDrop={(i) => {
-              if (dragIndex !== null) moveBlock(dragIndex, i);
-              setDragIndex(null);
-            }}
-            onBlockDragEnd={() => setDragIndex(null)}
-            blockChrome={(b) => (
+            dropDocIndex={dropIndex}
+            blockChrome={(b, di) => (
               <div className="kn-a4-chrome">
-                <span className="kn-a4-grip" title="Drag to move">
+                <span
+                  className="kn-a4-grip"
+                  title="Drag to move"
+                  onPointerDown={(e) => startBlockDrag(di, e)}
+                >
                   ⋮⋮
                 </span>
                 <button
