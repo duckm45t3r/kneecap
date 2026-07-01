@@ -247,6 +247,66 @@ cockpit list (rec) vs mirror the split ⑥ P3 read-only vs desktop-local private
 **On start:** implement the 3 must-fixes + a focused `/security-review` on the scope
 predicate per phase before each deploy.
 
+## W7 — Template Studio (Format Learning v2) — **BUILDING (2026-07-01)**
+
+Decided + locked with Wei 2026-07-01. Expands B8 Format Learning from "BYO learn →
+flat template" into a full **A4 multi-page WYSIWYG Template Studio**. Launch waits
+for W7 to complete, then publish (Wei: "直接開W7推到完成,做完再發佈").
+
+**Vision:** a user learns their firm's format from past docs (or starts blank),
+then designs a report template on **real A4 pages** — add pages, drag blocks, edit
+each block's prompt — seeing a live preview that IS the final output. Learned
+templates are **living** (tweak prompt/layout anytime, daily→yearly).
+
+**Locked decisions (Wei 2026-07-01):**
+- **A — hosted metering:** NO flat per-example/per-batch count. Hosted learning
+  meters **real token cost via the existing gauge** (deeper prompt → more spend →
+  more gauge). One `reportId` per learn batch; gauge shows cost, not a report tally.
+- **B — click→prompt:** keep the **right-side inspector** (existing pattern). No
+  inline popover in v1.
+- **C — pagination: MANUAL.** A **「＋ 新增分頁」** control; the user adds A4 pages
+  and arranges blocks per page while designing. Guarantees WYSIWYG (final gen lays
+  out exactly as designed). NOT auto-flow.
+- **D — samples:** Format Learning (`infer`) must **also emit a `sample` per block**
+  so the A4 preview looks like a real report, not ghost lines. (`BlockSample` type +
+  `BlockView` rendering already exist — only the infer prompt + TS validate need it.)
+- **#1 hosted open:** Format Learning available to hosted-only ($42) users.
+- **#3 provider choice:** user picks **BYO / Local / VHS** at the start of a learn.
+
+**Engineering model (decided; minimal-churn):**
+- **Page = a `pageBreak` marker in the existing `blocks[]`** (not an explicit pages
+  array). "＋ 新增分頁" inserts a `pageBreak`; the A4 renderer splits `blocks[]` into
+  sheets at each break. Keeps schema/persistence/drag/infer output intact. Promote to
+  explicit pages only if per-page properties are ever needed.
+- **Evolve `TemplateDesigner` in place** into the A4 Studio (do NOT fork a parallel
+  component). A new shared **`PagedView`** (A4 sheets, applies `page.font/accent` +
+  margins, groups blocks by `pageBreak`, renders via existing `BlockView`) is the
+  ONE surface for: designer center canvas · final report view · PDF/DOCX export
+  (`src/reports/exportReport.ts`) — so design preview = final doc = export.
+- **Hosted infer:** when provider=VHS, `infer_templates` routes through the existing
+  hosted chokepoint (`build_hosted_generate_body` → `POST /api/kneecap/generate`,
+  memo mode + infer prompt + PDF) instead of the BYO `call_*_memo`. `resolve_source`
+  already treats `vhs` as PDF-capable. No vhs-platform backend change.
+- **v1 pagination fidelity:** block-level onto manual pages (a block belongs to the
+  page it's on); no auto line-splitting. WYSIWYG comes from the user's manual layout.
+
+**Build order (foundation → up):**
+1. `types.ts`: `pageBreak` block type + A4 page constants. `templateStore` meta/
+   newBlock handle it; `BlockView` renders it as nothing (PagedView consumes it).
+2. `PagedView` — the shared A4 paged renderer.
+3. `TemplateDesigner` → A4 Studio: center = `PagedView`; add "＋ 新增分頁"; keep
+   inspector (B); drag across pages.
+4. `infer` (lib.rs `build_infer_template_prompt`): emit `sample` per block (D) +
+   optional pageBreaks; TS `templateFromInferred` parse/validate `sample`.
+5. Format Learning UI: provider chooser BYO/Local/**VHS** (#3); VHS routing (#1).
+6. `infer_templates` (lib.rs): hosted branch (provider==vhs) via
+   `build_hosted_generate_body`; one reportId per batch (A).
+7. Final report view + `exportReport.ts` → use `PagedView` pagination (WYSIWYG).
+8. Verify: `cargo build` + `tsc` green; Wei runtime-verifies the Tauri GUI.
+
+**Open at build time:** whether learned templates start single-page (user adds
+breaks) or infer proposes breaks; export page-size fidelity (A4 210×297 + margins).
+
 ## Branch map (as of this work)
 
 | Branch                              | Contains            | State                |

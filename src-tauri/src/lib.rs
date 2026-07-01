@@ -3437,6 +3437,11 @@ fn build_infer_template_prompt(source_text: &str) -> String {
         \x20\x20\x20\x20 {{ \"mode\": \"generated\", \"prompt\": string }}   // an instruction, in THIS FIRM'S voice, for what to write here\n\
         \x20\x20\x20\x20 // OR for fixed boilerplate the firm always repeats verbatim:\n\
         \x20\x20\x20\x20 {{ \"mode\": \"static\", \"text\": string }}\n\
+        \x20\x20\x20 \"sample\": {{  // representative EXAMPLE content for THIS block, matching its type (preview-only, never the real report):\n\
+        \x20\x20\x20\x20 // paragraph/heading/cover -> \"text\": string (+ optional \"caption\"); bullets -> \"bullets\": string[];\n\
+        \x20\x20\x20\x20 // metrics -> \"metrics\":[{{\"label\":string,\"value\":string}}]; chart -> \"chart\":[{{\"label\":string,\"value\":number}}];\n\
+        \x20\x20\x20\x20 // table -> \"rows\":string[][]; scoreBox -> \"score\":{{\"label\":string,\"value\":string}}\n\
+        \x20\x20\x20 }}\n\
         \x20\x20 }}\n\
         \x20 ]\n\
         }}\n\
@@ -3446,6 +3451,9 @@ fn build_infer_template_prompt(source_text: &str) -> String {
         VOICE (tone, length, level of detail) — derived from how THIS document is \
         written — NOT the literal text of this specific company. Make it reusable.\n\
         - Use \"static\" only for true boilerplate (legal disclaimer, firm name/tagline).\n\
+        - For EVERY generated block, ALSO emit a `sample` with realistic but clearly \
+        illustrative example content for that block's type (shapes listed above), so a \
+        preview can show the layout already filled in. Static blocks need no sample.\n\
         - Keep blocks between 3 and 12. Prefer `paragraph`, `bullets`, `metrics`, \
         `scoreBox`, `heading`, `cover` — use `chart`/`table` only if the document \
         clearly has them.\n\
@@ -3487,15 +3495,22 @@ async fn infer_templates(
     // Read the key once up front: a missing key is a whole-batch error (nothing
     // can run), distinct from a per-example failure. "local" has no key.
     let key = match provider.as_str() {
-        "local" => Zeroizing::new(String::new()),
+        // "local" has no key; "vhs" authenticates with the device token inside
+        // call_vhs_generate (not a BYO api key), so neither reads read_key.
+        "local" | "vhs" => Zeroizing::new(String::new()),
         _ => read_key(&provider)?,
     };
     let client = no_redirect_client(120)?;
 
+    // W7 (decision A) — ONE reportId for the whole learn batch. On the hosted
+    // (vhs) path the server meters real token cost against the gauge, and a batch
+    // counts as a single report regardless of example count. Unused by BYO/local.
+    let report_id = gen_id("rpt");
+
     let mut out = Vec::with_capacity(examples.len());
     for ex in examples {
         let name = ex.name.clone();
-        match infer_one(&app, &client, &provider, key.as_str(), &ex).await {
+        match infer_one(&app, &client, &provider, key.as_str(), &report_id, &ex).await {
             Ok(json) => out.push(InferResult {
                 name,
                 template_json: Some(json),
@@ -3519,6 +3534,7 @@ async fn infer_one(
     client: &reqwest::Client,
     provider: &str,
     key: &str,
+    report_id: &str,
     ex: &InferExample,
 ) -> Result<String, String> {
     let (source_text, native_pdf) = resolve_source(
@@ -3539,6 +3555,16 @@ async fn infer_one(
         "nvidia" => call_nvidia_with_heal(app, client, key, &user_prompt).await?,
         "gemini" => call_gemini_memo(client, key, &user_prompt, pdf).await?,
         "local" => call_local_memo(client, &user_prompt).await?,
+        // W7 (#1) — hosted Format Learning. Routes the infer prompt + PDF through
+        // the SAME hosted chokepoint as memo/IC/block generation; the device token
+        // + metering are handled inside call_vhs_generate. Native-PDF is passed as
+        // an inline base64 (resolve_source already treats vhs as PDF-capable).
+        "vhs" => {
+            let pdfs: Vec<String> = pdf.map(|p| vec![p.to_string()]).unwrap_or_default();
+            let (text, _quota) =
+                call_vhs_generate("memo", &user_prompt, 2000, report_id, &pdfs, &[]).await?;
+            text
+        }
         other => return Err(format!("Unknown provider: {}", other)),
     };
 

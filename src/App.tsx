@@ -836,6 +836,7 @@ function App() {
             <Settings
               onBack={goHome}
               configuredProviders={configuredProviders}
+              availableProviders={availableProviders}
               vhsLinked={vhsLinked}
               activeProvider={activeProvider}
               setActiveProvider={setActiveProvider}
@@ -1126,6 +1127,7 @@ function Home({
 function Settings({
   onBack,
   configuredProviders,
+  availableProviders,
   vhsLinked,
   activeProvider,
   setActiveProvider,
@@ -1138,6 +1140,9 @@ function Settings({
 }: {
   onBack: () => void;
   configuredProviders: Provider[];
+  // Providers usable right now (BYO keys + VHS-hosted when linked, minus any
+  // toggled off) — what Format Learning offers as its provider choice (#3).
+  availableProviders: Provider[];
   vhsLinked: boolean;
   // Shared app-level provider — forwarded to Format Learning so its picker
   // initialises from and reports back to the app's current provider.
@@ -1222,7 +1227,7 @@ function Settings({
           structure, block types, and voice — saved to your Templates list.
         </p>
         <FormatLearningOption
-          configuredProviders={configuredProviders}
+          configuredProviders={availableProviders}
           activeProvider={activeProvider}
           setActiveProvider={setActiveProvider}
           showToast={showToast}
@@ -1257,9 +1262,10 @@ function Settings({
 
 const LEARN_MAX_FILES = 10;
 const LEARN_MAX_PDF_BYTES = 5 * 1024 * 1024; // mirrors the Rust MAX_FETCH_BODY_BYTES cap
-// Format Learning runs through the BYO `call_*_memo` helpers in Rust (it reads a
-// provider key directly), so the hosted "vhs" relay isn't a valid target here.
-const LEARN_PROVIDERS: Provider[] = ["anthropic", "openai", "gemini", "nvidia", "local"];
+// W7 (#1/#3) — Format Learning runs on VHS-hosted, BYO keys, OR Local; the user
+// picks at the start of a learn. The Rust `infer_templates` routes each provider
+// accordingly (BYO call_*_memo / call_local_memo / hosted call_vhs_generate).
+const LEARN_PROVIDERS: Provider[] = ["vhs", "anthropic", "openai", "gemini", "nvidia", "local"];
 
 type InferExamplePayload = {
   name: string;
@@ -1291,12 +1297,12 @@ function FormatLearningOption({
   onTemplatesLearned,
 }: {
   configuredProviders: Provider[];
-  // Shared app-level provider. Format Learning's usable set (LEARN_PROVIDERS)
-  // excludes the hosted "vhs" relay, so it can't always honour the global value.
-  // It keeps a LOCAL selection that INITIALISES from the shared provider (when
-  // usable here) and REPORTS BACK to it on change — so picking a provider here
-  // still becomes the app's current provider, without ever forcing the global to
-  // a value (vhs) that this flow can't represent.
+  // Shared app-level provider. Format Learning now supports VHS-hosted, BYO, and
+  // Local (W7), so any usable provider is a valid global value. It keeps a LOCAL
+  // selection that INITIALISES from the shared provider (when usable here) and
+  // REPORTS BACK to it on change — picking a provider here also becomes the app's
+  // current provider. Falls back to the first usable one only if the global isn't
+  // usable for a learn (e.g. no key / not linked).
   activeProvider: Provider;
   setActiveProvider: (p: Provider) => void;
   showToast: (m: string) => void;
@@ -1473,8 +1479,8 @@ function FormatLearningOption({
     <div className="kn-fl">
       {noUsableProvider ? (
         <p className="kn-form-feedback kn-form-feedback--err">
-          Configure an LLM connection above first (Anthropic, OpenAI, Gemini,
-          Nvidia, or Local). VHS-hosted isn&apos;t available for Format Learning.
+          Connect a provider above first — link VHS-hosted, bring your own key
+          (Anthropic, OpenAI, Gemini, Nvidia), or run Local.
         </p>
       ) : (
         <>
@@ -3160,6 +3166,10 @@ function GenerateFromTemplate({
     template.blocks
       .map((b) => {
         if (b.content.mode === "static") {
+          // W7 — a page break carries into the compiled markdown as an invisible
+          // HTML-comment marker (never shown on-screen); the PDF/DOCX export turns
+          // it into a real page break, so the user's manual pages are WYSIWYG.
+          if (b.type === "pageBreak") return "<!-- pagebreak -->";
           if (b.type === "divider") return "---";
           if (b.type === "logo") return "";
           return b.content.text;
@@ -3180,8 +3190,9 @@ function GenerateFromTemplate({
     // Guard the block cap at generation time too (belt + suspenders with the
     // designer's add-block disable). A template that somehow exceeds the cap is
     // refused rather than burning N hosted calls.
-    if (template.blocks.length > MAX_TEMPLATE_BLOCKS) {
-      setErr(`Template has ${template.blocks.length} blocks — max ${MAX_TEMPLATE_BLOCKS}. Remove some in the editor.`);
+    const contentBlockCount = template.blocks.filter((b) => b.type !== "pageBreak").length;
+    if (contentBlockCount > MAX_TEMPLATE_BLOCKS) {
+      setErr(`Template has ${contentBlockCount} content blocks — max ${MAX_TEMPLATE_BLOCKS}. Remove some in the editor.`);
       setRunning(false);
       return;
     }

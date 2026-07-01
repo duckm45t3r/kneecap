@@ -2708,3 +2708,123 @@ a:hover {
   flex-direction: column;
   gap: 8px;
 }
+
+/* ── W7 · A4 Template Studio (PagedView) ──────────────────────────────
+   The design canvas becomes real A4 sheets (dark theme, consistent with the
+   existing designer/gallery). Manual pages via pageBreak; the export is the
+   white-paper deliverable. */
+.kn-ed-canvas.kn-ed-canvas--a4 {
+  display: block;
+  background: var(--vhs-ink);
+  padding: 20px;
+  border-radius: 10px;
+  overflow: auto;
+  min-height: 300px;
+}
+.kn-a4-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+.kn-a4-empty {
+  color: var(--vhs-paper-faint);
+  font-size: 12.5px;
+  padding: 24px;
+}
+.kn-a4 {
+  width: 100%;
+  max-width: 740px;
+  aspect-ratio: 210 / 297;
+  background: var(--vhs-ink-2);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.kn-a4-inner {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 18px 16px;
+  padding: 34px 38px;
+  overflow: hidden;
+}
+.kn-a4-blank {
+  margin: auto;
+  color: var(--vhs-paper-faint);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.kn-a4-foot {
+  flex: 0 0 auto;
+  text-align: center;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--vhs-paper-faint);
+  padding: 6px 0 10px;
+  border-top: 1px solid var(--vhs-hairline);
+}
+.kn-a4-block {
+  position: relative;
+  border-radius: 6px;
+  padding: 4px;
+}
+.kn-a4-block--full { flex: 1 1 100%; }
+.kn-a4-block--half { flex: 1 1 calc(50% - 8px); }
+.kn-a4-block--interactive { cursor: pointer; transition: box-shadow 0.15s; }
+.kn-a4-block--interactive:hover { box-shadow: 0 0 0 1px var(--vhs-hairline); }
+.kn-a4-block--sel { box-shadow: 0 0 0 1.5px var(--vhs-gold-dim) !important; }
+.kn-a4-block--drag { opacity: 0.4; }
+.kn-a4-chrome {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: none;
+  gap: 4px;
+  align-items: center;
+  z-index: 2;
+}
+.kn-a4-block--interactive:hover .kn-a4-chrome { display: flex; }
+.kn-a4-grip {
+  color: var(--vhs-paper-faint);
+  cursor: grab;
+  font-size: 12px;
+  letter-spacing: -2px;
+  background: var(--vhs-ink-3);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.kn-a4-del {
+  background: var(--vhs-ink-3);
+  color: var(--vhs-paper-mute);
+  border: 1px solid var(--vhs-hairline);
+  border-radius: 4px;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 11px;
+}
+.kn-a4-del:hover { color: var(--vhs-crimson); border-color: var(--vhs-crimson-dim); }
+.kn-ed-addpage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  background: var(--vhs-ink-2);
+  border: 1px dashed var(--vhs-hairline);
+  border-radius: 8px;
+  color: var(--vhs-paper-mute);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.kn-ed-addpage:hover { border-color: var(--vhs-gold-dim); color: var(--vhs-paper); }

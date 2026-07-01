@@ -17,7 +17,11 @@ export type BlockType =
   | "table"
   | "scoreBox"
   | "logo"
-  | "divider";
+  | "divider"
+  // W7 — a LAYOUT MARKER, not content. "＋ 新增分頁" inserts one; the A4 renderer
+  // (PagedView) splits blocks[] into separate A4 sheets at each pageBreak and
+  // never renders it as a block. The generation walk skips it (no LLM call).
+  | "pageBreak";
 
 export type BlockFont = "editorial" | "sans" | "mono";
 export type BlockAccent = "paper" | "gold" | "teal" | "crimson";

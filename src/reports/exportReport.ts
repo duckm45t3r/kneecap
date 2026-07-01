@@ -33,6 +33,7 @@ import {
   WidthType,
   AlignmentType,
   BorderStyle,
+  PageBreak,
 } from "docx";
 import type { SavedReport } from "./reportStore";
 import { getTemplate, getFirmLogo, type FirmLogo } from "../templates/templateStore";
@@ -75,7 +76,8 @@ type Tok =
   | { kind: "numbers"; items: string[] }
   | { kind: "table"; rows: string[][] }
   | { kind: "quote"; text: string }
-  | { kind: "rule" };
+  | { kind: "rule" }
+  | { kind: "pagebreak" };
 
 function splitTableRow(line: string): string[] {
   // "| a | b |" → ["a","b"]; tolerate missing outer pipes.
@@ -123,6 +125,15 @@ export function tokenizeMarkdown(md: string): Tok[] {
     }
 
     if (trimmed === "") {
+      i += 1;
+      continue;
+    }
+
+    // W7 — explicit page break from a template pageBreak block (an invisible
+    // HTML-comment marker in the compiled markdown). Compile joins blocks with a
+    // blank line, so this always sits on its own line.
+    if (trimmed === "<!-- pagebreak -->") {
+      toks.push({ kind: "pagebreak" });
       i += 1;
       continue;
     }
@@ -293,6 +304,9 @@ function tokensToHtml(toks: Tok[]): string {
       case "rule":
         out.push("<hr/>");
         break;
+      case "pagebreak":
+        out.push('<div class="pagebreak"></div>');
+        break;
       case "table": {
         const [head, ...body] = tk.rows;
         const thead = head
@@ -360,6 +374,7 @@ function buildPrintHtml(report: SavedReport, logo: FirmLogo | null): string {
   th, td { border: 1px solid #cfc8bb; padding: 5px 8px; text-align: left; vertical-align: top; }
   th { background: #f0ece3; font-weight: 600; }
   hr { border: 0; border-top: 1px solid #d8d2c6; margin: 14px 0; }
+  .pagebreak { break-after: page; page-break-after: always; height: 0; }
   thead { display: table-header-group; }
   tr, li, blockquote { page-break-inside: avoid; }
 </style></head>
@@ -487,6 +502,9 @@ function tokensToDocxChildren(toks: Tok[]): (Paragraph | Table)[] {
             children: [],
           })
         );
+        break;
+      case "pagebreak":
+        out.push(new Paragraph({ children: [new PageBreak()] }));
         break;
       case "table": {
         const rows = tk.rows.map(

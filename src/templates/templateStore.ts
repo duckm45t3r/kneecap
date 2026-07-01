@@ -4,6 +4,7 @@ import type {
   BlockAccent,
   BlockContent,
   BlockFont,
+  BlockSample,
   BlockSize,
   BlockStyle,
   BlockType,
@@ -242,6 +243,8 @@ export const BLOCK_TYPE_META: Record<BlockType, { label: string; icon: string }>
   scoreBox: { label: "Score box", icon: "★" },
   logo: { label: "Logo", icon: "◈" },
   divider: { label: "Divider", icon: "—" },
+  // W7 layout marker — not offered in the content palette; PagedView consumes it.
+  pageBreak: { label: "Page break", icon: "⤓" },
 };
 
 const DEFAULT_PROMPT: Partial<Record<BlockType, string>> = {
@@ -256,6 +259,18 @@ const DEFAULT_PROMPT: Partial<Record<BlockType, string>> = {
 };
 
 export function newBlock(type: BlockType): Block {
+  // pageBreak is a layout marker — no content, always full width. It carries an
+  // empty static content only to satisfy the uniform Block shape; PagedView
+  // consumes it as a sheet boundary and the generation walk skips it.
+  if (type === "pageBreak") {
+    return {
+      id: uid("brk"),
+      type,
+      label: "Page break",
+      width: "full",
+      content: { mode: "static", text: "" },
+    };
+  }
   const isStatic = type === "logo" || type === "divider";
   return {
     id: uid("blk"),
@@ -344,6 +359,53 @@ function normaliseContent(v: unknown, type: BlockType): BlockContent {
     : { mode: "generated", prompt: DEFAULT_PROMPT[type] ?? "Write this section from the source." };
 }
 
+// W7 (D) — Format Learning now asks the model to emit a representative `sample`
+// per block so the A4 preview reads like a real report, not ghost lines. The
+// model is untrusted about shape, so we walk every field and coerce/drop.
+function normaliseSample(v: unknown): BlockSample | undefined {
+  if (!isRecord(v)) return undefined;
+  const s: BlockSample = {};
+  const text = asStr(v.text);
+  if (text != null) s.text = text;
+  const caption = asStr(v.caption);
+  if (caption != null) s.caption = caption;
+  if (Array.isArray(v.bullets)) {
+    const bullets = v.bullets.filter((x): x is string => typeof x === "string");
+    if (bullets.length) s.bullets = bullets;
+  }
+  if (Array.isArray(v.metrics)) {
+    const metrics = v.metrics
+      .filter(isRecord)
+      .map((m) => ({ label: asStr(m.label) ?? "", value: asStr(m.value) ?? "" }))
+      .filter((m) => m.label || m.value);
+    if (metrics.length) s.metrics = metrics;
+  }
+  if (Array.isArray(v.chart)) {
+    const chart = v.chart
+      .filter(isRecord)
+      .map((c) => ({
+        label: asStr(c.label) ?? "",
+        value: typeof c.value === "number" ? c.value : Number(c.value),
+      }))
+      .filter((c) => Number.isFinite(c.value));
+    if (chart.length) s.chart = chart;
+  }
+  if (Array.isArray(v.rows)) {
+    const rows = v.rows
+      .filter((r): r is unknown[] => Array.isArray(r))
+      .map((r) => r.map((cell) => asStr(cell) ?? String(cell ?? "")));
+    if (rows.length) s.rows = rows;
+  }
+  if (isRecord(v.score)) {
+    const label = asStr(v.score.label);
+    const value = asStr(v.score.value);
+    if (label != null || value != null) {
+      s.score = { label: label ?? "", value: value ?? "" };
+    }
+  }
+  return Object.keys(s).length > 0 ? s : undefined;
+}
+
 function normaliseBlock(v: unknown): Block | null {
   if (!isRecord(v)) return null;
   const type = oneOf(v.type, BLOCK_TYPES);
@@ -359,6 +421,8 @@ function normaliseBlock(v: unknown): Block | null {
     content: normaliseContent(v.content, type),
   };
   if (style) block.style = style;
+  const sample = normaliseSample(v.sample);
+  if (sample) block.sample = sample;
   return block;
 }
 

@@ -18,7 +18,7 @@ import {
   LOGO_ACCEPT,
   type FirmLogo,
 } from "./templateStore";
-import { BlockView } from "./BlockView";
+import { PagedView } from "./PagedView";
 
 const PALETTE: BlockType[] = [
   "heading",
@@ -92,15 +92,25 @@ export function TemplateDesigner({
     updateBlock(id, { style: { ...b.style, ...patch } });
   };
 
-  const atBlockCap = draft.blocks.length >= MAX_TEMPLATE_BLOCKS;
+  // The cap bounds GENERATED content blocks (= LLM calls per report); pageBreaks
+  // are layout markers and don't count toward it.
+  const contentBlockCount = draft.blocks.filter((b) => b.type !== "pageBreak").length;
+  const atBlockCap = contentBlockCount >= MAX_TEMPLATE_BLOCKS;
 
   const addBlock = (type: BlockType) => {
     // Guard the cap here too — a stray call can't push past the ceiling even if
     // the disabled palette button is somehow triggered.
-    if (draft.blocks.length >= MAX_TEMPLATE_BLOCKS) return;
+    if (contentBlockCount >= MAX_TEMPLATE_BLOCKS) return;
     const b = newBlock(type);
     mutate({ ...draft, blocks: [...draft.blocks, b] });
     setSelectedId(b.id);
+  };
+
+  // "＋ Add page" — appends a pageBreak (a new blank A4 sheet at the end). The
+  // user then adds/drags blocks onto it. Manual pagination = WYSIWYG.
+  const addPageBreak = () => {
+    const b = newBlock("pageBreak");
+    mutate({ ...draft, blocks: [...draft.blocks, b] });
   };
 
   const removeBlock = (id: string) => {
@@ -155,7 +165,7 @@ export function TemplateDesigner({
           <div className="kn-ed-side-label">
             Add a block
             <span className="kn-ed-block-count">
-              {draft.blocks.length}/{MAX_TEMPLATE_BLOCKS}
+              {contentBlockCount}/{MAX_TEMPLATE_BLOCKS}
             </span>
           </div>
           <div className="kn-ed-palette">
@@ -175,6 +185,14 @@ export function TemplateDesigner({
           {atBlockCap && (
             <div className="kn-ed-block-cap-note">Max {MAX_TEMPLATE_BLOCKS} blocks</div>
           )}
+
+          <button
+            className="kn-ed-addpage"
+            onClick={addPageBreak}
+            title="Add a new A4 page (page break)"
+          >
+            <span className="kn-ed-palette-icon">⤓</span> Add page
+          </button>
 
           <div className="kn-ed-side-label">Page style</div>
           <label className="kn-ed-field">
@@ -242,36 +260,33 @@ export function TemplateDesigner({
           </label>
         </aside>
 
-        {/* ── Center: block canvas ── */}
-        <div className="kn-ed-canvas">
+        {/* ── Center: A4 paged canvas (W7) — the live preview IS the output ── */}
+        <div className="kn-ed-canvas kn-ed-canvas--a4">
           {draft.blocks.length === 0 && (
             <div className="kn-ed-empty">Add a block from the left to start.</div>
           )}
-          {draft.blocks.map((b, i) => (
-            <div
-              key={b.id}
-              className={`kn-ed-block ${b.id === selectedId ? "kn-ed-block--sel" : ""} ${
-                dragIndex === i ? "kn-ed-block--drag" : ""
-              }`}
-              draggable
-              onDragStart={() => setDragIndex(i)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => {
-                if (dragIndex !== null) moveBlock(dragIndex, i);
-                setDragIndex(null);
-              }}
-              onDragEnd={() => setDragIndex(null)}
-              onClick={() => setSelectedId(b.id)}
-            >
-              <div className="kn-ed-block-bar">
-                <span className="kn-ed-grip" title="Drag to reorder">
+          <PagedView
+            blocks={draft.blocks}
+            page={draft.page}
+            firmLogo={firmLogo}
+            keepEmptyPages
+            selectedId={selectedId}
+            onSelectBlock={setSelectedId}
+            draggable
+            dragDocIndex={dragIndex}
+            onBlockDragStart={(i) => setDragIndex(i)}
+            onBlockDrop={(i) => {
+              if (dragIndex !== null) moveBlock(dragIndex, i);
+              setDragIndex(null);
+            }}
+            onBlockDragEnd={() => setDragIndex(null)}
+            blockChrome={(b) => (
+              <div className="kn-a4-chrome">
+                <span className="kn-a4-grip" title="Drag to move">
                   ⋮⋮
                 </span>
-                <span className="kn-ed-block-type">
-                  {BLOCK_TYPE_META[b.type].icon} {b.type}
-                </span>
                 <button
-                  className="kn-ed-del"
+                  className="kn-a4-del"
                   title="Delete block"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -281,11 +296,8 @@ export function TemplateDesigner({
                   ✕
                 </button>
               </div>
-              <div className="kn-ed-block-body">
-                <BlockView block={b} firmLogo={firmLogo} />
-              </div>
-            </div>
-          ))}
+            )}
+          />
         </div>
 
         {/* ── Right: inspector ── */}
