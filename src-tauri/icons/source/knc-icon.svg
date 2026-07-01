@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  KN33C4P app icon v2 — lateral knee X-ray.
+  A stylised side view of the knee joint: distal femur (top), patella
+  articulating in the trochlear groove, tibial plateau (bottom). Rendered as
+  cyan-tinted radiographic bone against a dark medical-film background, with a
+  soft outer glow suggesting radiation scatter.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Soft edge glow — approximates the fuzzy fall-off of an X-ray plate.
+         resvg (used by `tauri icon`) supports feGaussianBlur. -->
+    <filter id="bone-glow" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6"/>
+    </filter>
+
+    <!-- Inner brightness gradient: cortical bone (edge) is denser and reads
+         brighter than the cancellous medulla (interior) on a real film. -->
+    <radialGradient id="bone-fill" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="0%"  stop-color="#a8c4d4" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#dae8f0" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#f0f6f8" stop-opacity="1"/>
+    </radialGradient>
+
+    <!-- Dim outer halo — the "scatter" surrounding a real X-ray silhouette. -->
+    <radialGradient id="scatter-halo" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#88b8cc" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#88b8cc" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Film background: near-black with a slight cyan cast, matching the way a
+       digital radiograph reads on a diagnostic monitor. -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="#0a1220"/>
+
+  <!-- Ambient joint halo behind the bones. -->
+  <ellipse cx="512" cy="520" rx="380" ry="440" fill="url(#scatter-halo)"/>
+
+  <!-- ── Femur (distal end + shaft, coming from top) ─────────────────
+       Lateral view: shaft narrows going up; distal end flares into the
+       posterior + anterior condyles. The rounded "double bump" at the bottom
+       is what gives the knee its silhouette from the side. -->
+  <path
+    fill="url(#bone-fill)"
+    filter="url(#bone-glow)"
+    d="
+      M 420,80
+      C 410,80 400,90 396,110
+      L 380,340
+      C 375,380 370,410 360,440
+      C 350,470 340,500 355,530
+      C 375,555 415,568 460,570
+      C 495,572 530,568 560,555
+      C 590,540 615,515 620,485
+      C 625,455 620,420 615,390
+      L 605,110
+      C 601,90 591,80 581,80
+      Z
+    "
+  />
+
+  <!-- Femoral trochlear groove hint — a subtle darker line between the
+       condyles on the anterior surface, where the patella sits. -->
+  <path
+    stroke="#6a8ea0"
+    stroke-width="3"
+    fill="none"
+    opacity="0.55"
+    d="M 555,420 C 570,470 570,510 555,545"
+  />
+
+  <!-- ── Patella (in the trochlear groove, anterior to the femur) ────
+       Triangular from lateral view, base superior, apex inferior. Sits in
+       front (right side of the icon) of the distal femur, slightly overlapping
+       so the joint reads as one integrated knee. -->
+  <path
+    fill="url(#bone-fill)"
+    filter="url(#bone-glow)"
+    d="
+      M 650,400
+      C 700,400 740,415 748,445
+      C 754,470 748,500 738,525
+      C 728,548 712,566 690,570
+      C 668,570 648,562 640,540
+      C 634,520 634,498 638,478
+      C 640,460 640,440 645,420
+      C 646,410 648,404 650,400
+      Z
+    "
+  />
+
+  <!-- ── Joint space (dark thin gap between femur & tibia) ───────────
+       On a real X-ray this is the cartilage — radiolucent — showing as a
+       narrow dark band. Rendered as an ellipse cut-out over the darker film. -->
+  <ellipse cx="490" cy="605" rx="180" ry="14" fill="#0a1220" opacity="0.85"/>
+
+  <!-- ── Tibia (proximal end + shaft, going to bottom) ───────────────
+       Plateau is the widest, tapering into the tibial shaft. Slight anterior
+       tibial tuberosity bump on the right (front). -->
+  <path
+    fill="url(#bone-fill)"
+    filter="url(#bone-glow)"
+    d="
+      M 320,620
+      C 315,620 310,628 308,640
+      C 305,660 306,680 315,700
+      C 325,720 340,738 360,750
+      C 370,758 375,780 370,810
+      L 380,940
+      C 384,955 394,960 405,960
+      L 585,960
+      C 595,960 605,955 610,940
+      L 605,810
+      C 600,780 600,758 615,750
+      C 640,738 660,720 668,700
+      C 675,680 674,660 670,640
+      C 668,628 664,620 660,620
+      Z
+    "
+  />
+
+  <!-- Tibial tuberosity (the bump on the anterior tibia, where the patellar
+       tendon attaches). Small brighter accent to the right. -->
+  <path
+    fill="url(#bone-fill)"
+    filter="url(#bone-glow)"
+    opacity="0.9"
+    d="
+      M 668,700
+      C 690,720 700,750 695,780
+      C 690,800 680,808 668,806
+      C 655,802 650,790 653,770
+      C 655,745 660,720 668,700
+      Z
+    "
+  />
+
+  <!-- ── Fibula head (subtle, posterior/lateral to tibia) ────────────
+       Small ovoid behind the tibia. Kept faint so at 32px it fades into the
+       tibia silhouette without cluttering. -->
+  <ellipse cx="335" cy="720" rx="30" ry="42" fill="url(#bone-fill)" filter="url(#bone-glow)" opacity="0.75"/>
+</svg>
