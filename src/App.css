@@ -2732,19 +2732,47 @@ a:hover {
   font-size: 12.5px;
   padding: 24px;
 }
-.kn-a4 {
+/* W7 #1 — paper mode: white sheet + remapped color tokens so BlockView / markdown
+   render dark-ink-on-paper, matching the exported PDF/DOCX. No per-component
+   restyle — descendants inherit these overridden vars. Shared by the designer
+   sheets (.kn-a4) and the final report pages (.kn-a4-doc). */
+.kn-a4,
+.kn-a4-doc {
+  --vhs-paper: #1a1e2e;
+  --vhs-paper-dim: #3a3e4d;
+  --vhs-paper-mute: #5e5a52;
+  --vhs-paper-faint: #8a857b;
+  --vhs-ink-2: #f1ede4;
+  --vhs-ink-3: #e8e2d6;
+  --vhs-hairline: #d8d2c6;
+  --vhs-gold: var(--vhs-gold-dim);
+  --vhs-teal: var(--vhs-teal-deep);
+  --vhs-crimson: var(--vhs-crimson-dim);
   width: 100%;
   max-width: 740px;
-  aspect-ratio: 210 / 297;
-  background: var(--vhs-ink-2);
-  border: 1px solid var(--vhs-hairline);
+  background: #fbfaf7;
+  color: #1a1e2e;
+  border: 1px solid #d8d2c6;
   border-radius: 6px;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+}
+.kn-a4 {
+  aspect-ratio: 210 / 297;
   position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  margin: 0 auto;
 }
+/* Final report: A4 width but height grows with real content (no clipping); a
+   very long section may exceed one physical sheet — the export re-paginates it. */
+.kn-a4-doc {
+  min-height: 940px;
+  padding: 44px 48px;
+  margin: 0 auto;
+  position: relative;
+}
+.kn-result-pages { padding: 20px; background: var(--vhs-ink); border-radius: 10px; }
 .kn-a4-inner {
   flex: 1 1 auto;
   display: flex;
@@ -2832,3 +2860,18 @@ a:hover {
   transition: border-color 0.15s, color 0.15s;
 }
 .kn-ed-addpage:hover { border-color: var(--vhs-gold-dim); color: var(--vhs-paper); }
+
+/* W7 — beta badge next to the top-left wordmark */
+.kn-beta {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vhs-gold);
+  border: 1px solid var(--vhs-gold-dim);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 8px;
+  align-self: center;
+  line-height: 1.5;
+}

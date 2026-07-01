@@ -789,6 +789,7 @@ function App() {
         <button className="kn-logo" onClick={goHome} title="Home">
           KN33C4P
         </button>
+        <span className="kn-beta" title="Beta release">beta</span>
         <div className="kn-header-spacer" />
         <button
           className="kn-icon-btn"
@@ -3437,22 +3438,41 @@ function GenerateFromTemplate({
         </div>
       )}
 
-      {compiled && (
-        <div className="kn-result">
-          <h3 className="kn-result-title">{template.name}</h3>
-          <div className="kn-markdown">
-            {firmLogo && hasLogoBlock && (
-              <img
-                src={firmLogo.dataUrl}
-                alt=""
-                className="kn-tpl-logo-img"
-                style={{ marginBottom: 16 }}
-              />
-            )}
-            <MarkdownView source={compiled} />
-          </div>
-        </div>
-      )}
+      {compiled &&
+        (() => {
+          // W7 (#2) — show the result as real A4 paper pages (WYSIWYG with the
+          // export): split at the pageBreak marker the compile step embedded.
+          const pages = compiled
+            .split(/\n*<!--\s*pagebreak\s*-->\n*/)
+            .map((c) => c.trim())
+            .filter((c) => c.length > 0);
+          const pageList = pages.length > 0 ? pages : [compiled];
+          return (
+            <div className="kn-result">
+              <h3 className="kn-result-title">{template.name}</h3>
+              <div className="kn-a4-stack kn-result-pages">
+                {pageList.map((chunk, i) => (
+                  <section key={i} className="kn-a4-doc kn-markdown">
+                    {i === 0 && firmLogo && hasLogoBlock && (
+                      <img
+                        src={firmLogo.dataUrl}
+                        alt=""
+                        className="kn-tpl-logo-img"
+                        style={{ marginBottom: 16 }}
+                      />
+                    )}
+                    <MarkdownView source={chunk} />
+                    {pageList.length > 1 && (
+                      <div className="kn-a4-foot">
+                        {i + 1} / {pageList.length}
+                      </div>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }
