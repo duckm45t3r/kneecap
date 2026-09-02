@@ -73,3 +73,19 @@ Full spec of what's built: `ROADMAP.md §W7`.
 - **Tauri WKWebView swallows HTML5 `draggable`** — reorder had to be rewritten to pointer events + `elementFromPoint`. Don't reintroduce `draggable` attributes if adding new drag features.
 - **Hosted 502 = check Anthropic credit FIRST**, not model/code. 7/1 outage lesson. `vhs-platform/app/api/kneecap/generate/route.ts` now classifies errors with a `reason` field (auth / rate_limited / insufficient_credit / bad_request / network / upstream / empty_response) — surface that to the user if needed.
 - **Local `.env.local` Anthropic key ≠ prod key.** Local dev tests can't validate prod hosted path.
+
+---
+
+## 共通協定(Alfred Command Protocol v1)— 指向母目錄,不在此重複
+
+本 project 的工作實際上都在 **`VH Site/` 這個 cwd** 底下的 session 進行(已查證:11 個 VH Site
+session 的 cwd 全都是 `VH Site` 本身,沒有任何一個從這個子目錄啟動)。
+
+因此共通協定**只維護一份**,在 `VH Site/SESSION_CONTEXT.md` 檔尾:身份邊界 / `_STATE.md`
+狀態契約 / 執行紀律(before-during-after)/ 升級路徑。開工前讀那份。
+
+**為什麼不在這裡複製一份**:兩份會 drift。協定改版時只有一處要更新,是刻意的設計
+(見 `Alfred/config/session_protocol_template.md` 的版本管理備註)。
+
+> 這份 handoff 檔的定位是**特定工作串的交接文件**(2026-07-01 marathon 的續接點),
+> 不是 session governing 檔 —— governing 的角色在母目錄的 SESSION_CONTEXT.md。
