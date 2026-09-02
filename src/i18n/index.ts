@@ -33,9 +33,20 @@ export function getLang(): Lang {
   return current;
 }
 
+type TParams = Record<string, string | number>;
+
+/** Replace `{name}` placeholders in `raw` with `String(params.name)`, leaving
+ * unrecognized placeholders untouched (surfaces the miss instead of hiding it). */
+function interpolate(raw: string, params?: TParams): string {
+  if (!params) return raw;
+  return raw.replace(/\{(\w+)\}/g, (match, name) =>
+    name in params ? String(params[name]) : match,
+  );
+}
+
 /** Translate with the CURRENT language, falling back to EN then the raw key. */
-export function translate(key: MessageKey): string {
-  return DICTS[current][key] ?? DICTS.en[key] ?? key;
+export function translate(key: MessageKey, params?: TParams): string {
+  return interpolate(DICTS[current][key] ?? DICTS.en[key] ?? key, params);
 }
 
 export function setLang(lang: Lang): void {
@@ -54,7 +65,7 @@ export function setLang(lang: Lang): void {
  * setter. Re-renders every consumer on a language change.
  */
 export function useT(): {
-  t: (key: MessageKey) => string;
+  t: (key: MessageKey, params?: TParams) => string;
   lang: Lang;
   setLang: (l: Lang) => void;
 } {
@@ -67,6 +78,7 @@ export function useT(): {
       listeners.delete(sync);
     };
   }, []);
-  const t = (key: MessageKey) => DICTS[lang][key] ?? DICTS.en[key] ?? key;
+  const t = (key: MessageKey, params?: TParams) =>
+    interpolate(DICTS[lang][key] ?? DICTS.en[key] ?? key, params);
   return { t, lang, setLang };
 }

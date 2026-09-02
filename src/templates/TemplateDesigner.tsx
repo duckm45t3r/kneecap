@@ -19,6 +19,7 @@ import {
   type FirmLogo,
 } from "./templateStore";
 import { PagedView } from "./PagedView";
+import { useT } from "../i18n";
 
 const PALETTE: BlockType[] = [
   "heading",
@@ -47,6 +48,7 @@ export function TemplateDesigner({
   onSave: (t: Template) => void;
   onClose: () => void;
 }) {
+  const { t } = useT();
   const [draft, setDraft] = useState<Template>(initial);
   const [selectedId, setSelectedId] = useState<string | null>(
     initial.blocks[0]?.id ?? null
@@ -186,9 +188,9 @@ export function TemplateDesigner({
           ← Back
         </button>
         <div className="kn-ed-top-actions">
-          {dirty && <span className="kn-ed-dirty">Unsaved</span>}
+          {dirty && <span className="kn-ed-dirty">{t("studio.unsaved")}</span>}
           <button className="kn-btn kn-btn--primary" onClick={handleSave}>
-            Save template
+            {t("studio.saveTemplate")}
           </button>
         </div>
       </div>
@@ -197,50 +199,50 @@ export function TemplateDesigner({
         {/* ── Left: name + palette + page style ── */}
         <aside className="kn-ed-side">
           <label className="kn-label kn-label--grow">
-            Template name
+            {t("studio.templateName")}
             <input
               type="text"
               className="kn-input"
-              value={draft.name}
-              onChange={(e) => mutate({ ...draft, name: e.target.value })}
+              value={draft.nameKey ? t(draft.nameKey) : draft.name}
+              onChange={(e) => mutate({ ...draft, name: e.target.value, nameKey: undefined })}
             />
           </label>
 
           <div className="kn-ed-side-label">
-            Add a block
+            {t("studio.addBlock")}
             <span className="kn-ed-block-count">
               {contentBlockCount}/{MAX_TEMPLATE_BLOCKS}
             </span>
           </div>
           <div className="kn-ed-palette">
-            {PALETTE.map((t) => (
+            {PALETTE.map((blockType) => (
               <button
-                key={t}
+                key={blockType}
                 className="kn-ed-palette-btn"
-                onClick={() => addBlock(t)}
+                onClick={() => addBlock(blockType)}
                 disabled={atBlockCap}
-                title={atBlockCap ? `Max ${MAX_TEMPLATE_BLOCKS} blocks` : ""}
+                title={atBlockCap ? t("studio.maxBlocksTooltip", { max: MAX_TEMPLATE_BLOCKS }) : ""}
               >
-                <span className="kn-ed-palette-icon">{BLOCK_TYPE_META[t].icon}</span>
-                {BLOCK_TYPE_META[t].label}
+                <span className="kn-ed-palette-icon">{BLOCK_TYPE_META[blockType].icon}</span>
+                {t(BLOCK_TYPE_META[blockType].labelKey)}
               </button>
             ))}
           </div>
           {atBlockCap && (
-            <div className="kn-ed-block-cap-note">Max {MAX_TEMPLATE_BLOCKS} blocks</div>
+            <div className="kn-ed-block-cap-note">{t("studio.maxBlocksNote", { max: MAX_TEMPLATE_BLOCKS })}</div>
           )}
 
           <button
             className="kn-ed-addpage"
             onClick={addPageBreak}
-            title="Add a new A4 page (page break)"
+            title={t("studio.addPageTooltip")}
           >
-            <span className="kn-ed-palette-icon">⤓</span> Add page
+            <span className="kn-ed-palette-icon">⤓</span> {t("studio.addPage")}
           </button>
 
-          <div className="kn-ed-side-label">Page style</div>
+          <div className="kn-ed-side-label">{t("studio.pageStyle")}</div>
           <label className="kn-ed-field">
-            Font
+            {t("studio.font")}
             <select
               className="kn-input kn-input--select"
               value={draft.page.font}
@@ -256,7 +258,7 @@ export function TemplateDesigner({
             </select>
           </label>
           <label className="kn-ed-field">
-            Accent
+            {t("studio.accent")}
             <select
               className="kn-input kn-input--select"
               value={draft.page.accent}
@@ -271,13 +273,13 @@ export function TemplateDesigner({
               ))}
             </select>
           </label>
-          <div className="kn-ed-side-label">Firm logo</div>
+          <div className="kn-ed-side-label">{t("studio.firmLogo")}</div>
           {firmLogo && (
             <div className="kn-ed-logo-row">
               <img src={firmLogo.dataUrl} alt="" className="kn-ed-logo-thumb" />
               <span className="kn-ed-logo-name">{firmLogo.name}</span>
               <button className="kn-link-btn" onClick={removeLogo}>
-                Remove
+                {t("studio.logoRemove")}
               </button>
             </div>
           )}
@@ -288,7 +290,7 @@ export function TemplateDesigner({
               style={{ display: "none" }}
               onChange={(e) => onLogoFile(e.target.files?.[0] ?? null)}
             />
-            {firmLogo ? "Replace logo…" : "Upload logo (PNG / SVG)…"}
+            {firmLogo ? t("studio.replaceLogo") : t("studio.uploadLogo")}
           </label>
           {logoMsg && <div className="kn-ed-logo-msg">{logoMsg}</div>}
 
@@ -300,14 +302,14 @@ export function TemplateDesigner({
                 mutate({ ...draft, page: { ...draft.page, showLogo: e.target.checked } })
               }
             />
-            Show firm logo
+            {t("studio.showLogo")}
           </label>
         </aside>
 
         {/* ── Center: A4 paged canvas (W7) — the live preview IS the output ── */}
         <div className="kn-ed-canvas kn-ed-canvas--a4">
           {draft.blocks.length === 0 && (
-            <div className="kn-ed-empty">Add a block from the left to start.</div>
+            <div className="kn-ed-empty">{t("studio.emptyCanvas")}</div>
           )}
           <PagedView
             blocks={draft.blocks}
@@ -322,14 +324,14 @@ export function TemplateDesigner({
               <div className="kn-a4-chrome">
                 <span
                   className="kn-a4-grip"
-                  title="Drag to move"
+                  title={t("studio.dragToMove")}
                   onPointerDown={(e) => startBlockDrag(di, e)}
                 >
                   ⋮⋮
                 </span>
                 <button
                   className="kn-a4-del"
-                  title="Delete block"
+                  title={t("studio.deleteBlock")}
                   onClick={(e) => {
                     e.stopPropagation();
                     removeBlock(b.id);
@@ -345,24 +347,26 @@ export function TemplateDesigner({
         {/* ── Right: inspector ── */}
         <aside className="kn-ed-inspector">
           {!selected ? (
-            <div className="kn-ed-inspector-empty">Select a block to edit it.</div>
+            <div className="kn-ed-inspector-empty">{t("studio.inspectorEmpty")}</div>
           ) : (
             <>
               <div className="kn-ed-side-label">
-                {BLOCK_TYPE_META[selected.type].label}
+                {t(BLOCK_TYPE_META[selected.type].labelKey)}
               </div>
 
               <label className="kn-ed-field">
-                Label
+                {t("studio.blockLabel")}
                 <input
                   type="text"
                   className="kn-input"
-                  value={selected.label}
-                  onChange={(e) => updateBlock(selected.id, { label: e.target.value })}
+                  value={selected.labelKey ? t(selected.labelKey) : selected.label}
+                  onChange={(e) =>
+                    updateBlock(selected.id, { label: e.target.value, labelKey: undefined })
+                  }
                 />
               </label>
 
-              <div className="kn-ed-field-label">Content</div>
+              <div className="kn-ed-field-label">{t("studio.content")}</div>
               <div className="kn-ed-seg">
                 <button
                   className={`kn-ed-seg-btn ${
@@ -377,7 +381,7 @@ export function TemplateDesigner({
                     })
                   }
                 >
-                  Generated
+                  {t("studio.contentGenerated")}
                 </button>
                 <button
                   className={`kn-ed-seg-btn ${
@@ -392,13 +396,13 @@ export function TemplateDesigner({
                     })
                   }
                 >
-                  Static
+                  {t("studio.contentStatic")}
                 </button>
               </div>
 
               {selected.content.mode === "generated" ? (
                 <label className="kn-ed-field">
-                  Prompt for this block
+                  {t("studio.promptLabel")}
                   <textarea
                     className="kn-input kn-input--textarea"
                     rows={6}
@@ -408,16 +412,16 @@ export function TemplateDesigner({
                         content: { mode: "generated", prompt: e.target.value },
                       })
                     }
-                    placeholder="What should this block say? e.g. Summarize the founding team, lead with prior exits."
+                    placeholder={t("studio.promptPlaceholder")}
                   />
                 </label>
               ) : (
                 <label className="kn-ed-field">
-                  Fixed text
+                  {t("studio.fixedTextLabel")}
                   <textarea
                     className="kn-input kn-input--textarea"
                     rows={4}
-                    value={selected.content.text}
+                    value={selected.content.textKey ? t(selected.content.textKey) : selected.content.text}
                     onChange={(e) =>
                       updateBlock(selected.id, {
                         content: { mode: "static", text: e.target.value },
@@ -427,10 +431,10 @@ export function TemplateDesigner({
                 </label>
               )}
 
-              <div className="kn-ed-field-label">Style</div>
+              <div className="kn-ed-field-label">{t("studio.style")}</div>
               <div className="kn-ed-style-grid">
                 <label className="kn-ed-field">
-                  Font
+                  {t("studio.font")}
                   <select
                     className="kn-input kn-input--select"
                     value={selected.style?.font ?? "editorial"}
@@ -444,7 +448,7 @@ export function TemplateDesigner({
                   </select>
                 </label>
                 <label className="kn-ed-field">
-                  Size
+                  {t("studio.size")}
                   <select
                     className="kn-input kn-input--select"
                     value={selected.style?.size ?? "md"}
@@ -458,7 +462,7 @@ export function TemplateDesigner({
                   </select>
                 </label>
                 <label className="kn-ed-field">
-                  Weight
+                  {t("studio.weight")}
                   <select
                     className="kn-input kn-input--select"
                     value={selected.style?.weight ?? "medium"}
@@ -476,7 +480,7 @@ export function TemplateDesigner({
                   </select>
                 </label>
                 <label className="kn-ed-field">
-                  Accent
+                  {t("studio.accent")}
                   <select
                     className="kn-input kn-input--select"
                     value={selected.style?.accent ?? "paper"}
@@ -492,7 +496,7 @@ export function TemplateDesigner({
                   </select>
                 </label>
                 <label className="kn-ed-field">
-                  Align
+                  {t("studio.align")}
                   <select
                     className="kn-input kn-input--select"
                     value={selected.style?.align ?? "left"}
@@ -500,12 +504,12 @@ export function TemplateDesigner({
                       updateStyle(selected.id, { align: e.target.value as "left" | "center" })
                     }
                   >
-                    <option value="left">left</option>
-                    <option value="center">center</option>
+                    <option value="left">{t("studio.alignLeft")}</option>
+                    <option value="center">{t("studio.alignCenter")}</option>
                   </select>
                 </label>
                 <label className="kn-ed-field">
-                  Width
+                  {t("studio.width")}
                   <select
                     className="kn-input kn-input--select"
                     value={selected.width}
@@ -513,8 +517,8 @@ export function TemplateDesigner({
                       updateBlock(selected.id, { width: e.target.value as "full" | "half" })
                     }
                   >
-                    <option value="full">full</option>
-                    <option value="half">half</option>
+                    <option value="full">{t("studio.widthFull")}</option>
+                    <option value="half">{t("studio.widthHalf")}</option>
                   </select>
                 </label>
               </div>

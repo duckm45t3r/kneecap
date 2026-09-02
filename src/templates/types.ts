@@ -6,6 +6,15 @@
 // same model powers the drag-drop designer, the generation walk, and the
 // rendered document — so "drag-drop layout" and "custom content prompt" are the
 // same object.
+//
+// W7 i18n: the 4 built-in starters (see starters.ts) carry an optional
+// `*Key` alongside their English `name`/`label`/`text` — render sites should
+// prefer `t(fooKey)` when present, falling back to the raw string otherwise.
+// User-forked/custom templates never get a key (duplicateTemplate() strips
+// it), so their names/labels stay exactly as the user typed them regardless
+// of UI language.
+
+import type { MessageKey } from "../i18n/messages";
 
 export type BlockType =
   | "cover"
@@ -39,7 +48,7 @@ export type BlockStyle = {
 // fixed text (disclaimer, firm name, …).
 export type BlockContent =
   | { mode: "generated"; prompt: string }
-  | { mode: "static"; text: string };
+  | { mode: "static"; text: string; textKey?: MessageKey };
 
 // Optional representative data used ONLY by the read-only gallery preview, so a
 // user can see the shape of a template before generating anything real.
@@ -57,6 +66,7 @@ export type Block = {
   id: string;
   type: BlockType;
   label: string; // editor-facing name + section heading text
+  labelKey?: MessageKey;
   width: "full" | "half";
   style?: BlockStyle;
   content: BlockContent;
@@ -71,9 +81,11 @@ export type Template = {
   // full-ic; user-forked templates use a generated `custom-…` id.
   id: string;
   name: string;
+  nameKey?: MessageKey;
   kind: TemplateKind;
   variant: TemplateVariant;
   description: string;
+  descriptionKey?: MessageKey;
   page: { font: BlockFont; accent: BlockAccent; showLogo: boolean };
   blocks: Block[];
 };

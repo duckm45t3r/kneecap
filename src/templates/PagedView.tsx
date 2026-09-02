@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { Block, BlockFont, Template } from "./types";
 import type { FirmLogo } from "./templateStore";
 import { BlockView } from "./BlockView";
+import { useT } from "../i18n";
 
 // W7 — the ONE A4 paged surface. Splits the flat block list into A4 sheets at
 // each `pageBreak` marker and renders each sheet with the template's page style.
@@ -69,6 +70,7 @@ export function PagedView({
   dragDocIndex?: number | null;
   dropDocIndex?: number | null;
 }) {
+  const { t } = useT();
   const pages = splitIntoPages(blocks, keepEmptyPages);
   const interactive = typeof onSelectBlock === "function";
 
@@ -86,7 +88,7 @@ export function PagedView({
   if (pages.length === 0) {
     return (
       <div className="kn-a4-stack">
-        <div className="kn-a4-empty">Add a block to start your first page.</div>
+        <div className="kn-a4-empty">{t("studio.firstPage")}</div>
       </div>
     );
   }
@@ -98,7 +100,7 @@ export function PagedView({
           <div className="kn-a4-inner">
             {pageBlocks.length === 0 ? (
               <div className="kn-a4-blank">
-                Blank page — add a block or drag one here.
+                {t("studio.blankPage")}
               </div>
             ) : (
               pageBlocks.map((b) => {

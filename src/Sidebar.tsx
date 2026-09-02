@@ -20,17 +20,22 @@ export type SidebarNav =
   | "icreport"
   | "settings";
 
-function timeAgo(iso: string): string {
+// `t` is threaded in from the calling component's `useT()` — this is a plain
+// helper (not a component/hook), so it can't call useT() itself.
+function timeAgo(
+  iso: string,
+  t: (key: MessageKey, params?: Record<string, string | number>) => string,
+): string {
   const ms = Date.parse(iso);
   if (!ms) return "";
   const diff = Date.now() - ms;
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t("common.justNow");
+  if (mins < 60) return t("common.minsAgo", { m: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("common.hoursAgo", { h: hours });
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return t("common.daysAgo", { d: days });
   return new Date(ms).toLocaleDateString();
 }
 
@@ -141,7 +146,7 @@ export function Sidebar({
                           d.source_count === 1 ? tr("sidebar.source") : tr("sidebar.sources")
                         }`
                       : ""}
-                    {d.updated_at ? ` · ${timeAgo(d.updated_at)}` : ""}
+                    {d.updated_at ? ` · ${timeAgo(d.updated_at, tr)}` : ""}
                   </span>
                 </button>
               </li>
@@ -158,9 +163,9 @@ export function Sidebar({
               <button
                 className="kn-sidebar-tpl-main"
                 onClick={() => onGenerateTemplate(t.id)}
-                title={`${tr("sidebar.generateFrom")} ${t.name}`}
+                title={`${tr("sidebar.generateFrom")} ${t.nameKey ? tr(t.nameKey) : t.name}`}
               >
-                <span className="kn-sidebar-tpl-name">{t.name}</span>
+                <span className="kn-sidebar-tpl-name">{t.nameKey ? tr(t.nameKey) : t.name}</span>
                 <span
                   className={`kn-sidebar-tpl-badge ${
                     isStarter(t.id) ? "kn-sidebar-tpl-badge--starter" : "kn-sidebar-tpl-badge--custom"

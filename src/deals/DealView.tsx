@@ -18,6 +18,8 @@ import {
 } from "./dealStore";
 import { getFirmLogo } from "../templates/templateStore";
 import { exportReportToPdf, exportReportToDocx } from "../reports/exportReport";
+import { useT } from "../i18n";
+import type { MessageKey } from "../i18n/messages";
 
 // ─── Deal view ────────────────────────────────────────────────────────
 //
@@ -51,6 +53,18 @@ const NATIVE_PDF_PROVIDERS: ReadonlySet<string> = new Set([
 
 function isTextOnlyProvider(provider: string): boolean {
   return !NATIVE_PDF_PROVIDERS.has(provider);
+}
+
+// `t` is threaded in from the calling component's `useT()` — PROVIDER_LABELS is
+// a plain module-level object, so it can't call useT() itself. "local"/"vhs"
+// are our own descriptive labels (translated); the rest are brand names.
+function providerLabel(
+  id: string,
+  t: (key: MessageKey, params?: Record<string, string | number>) => string,
+): string {
+  if (id === "local") return t("provider.local");
+  if (id === "vhs") return t("provider.vhs");
+  return PROVIDER_LABELS[id] ?? id;
 }
 
 const KIND_EMOJI: Record<SourceKind, string> = {
@@ -120,6 +134,7 @@ export function DealView({
   // The version currently open in the viewer (null = panel overview).
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [showNewVersion, setShowNewVersion] = useState(false);
+  const { t } = useT();
 
   const firmLogo = getFirmLogo();
 
@@ -151,7 +166,7 @@ export function DealView({
         <button className="kn-back" onClick={onBack}>
           ← Back
         </button>
-        <p className="kn-flow-sub">Loading report…</p>
+        <p className="kn-flow-sub">{t("deal.loading")}</p>
       </div>
     );
   }
@@ -163,7 +178,7 @@ export function DealView({
           ← Back
         </button>
         <div className="kn-form-feedback kn-form-feedback--err">
-          ✗ This report could not be found — it may have been deleted.
+          ✗ {t("deal.notFound")}
         </div>
       </div>
     );
@@ -271,20 +286,21 @@ function DealHeader({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(deal.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const { t } = useT();
 
   const save = async () => {
     const name = draft.trim();
     if (!name) {
-      showToast("Report name is required");
+      showToast(t("deal.nameRequired"));
       return;
     }
     try {
       await renameDeal(deal.id, name);
       setEditing(false);
-      showToast("Report renamed");
+      showToast(t("deal.renamed"));
       onRenamed();
     } catch (e) {
-      showToast(`Rename failed: ${String(e)}`);
+      showToast(t("deal.renameFailed", { error: String(e) }));
     }
   };
 
@@ -306,7 +322,7 @@ function DealHeader({
             autoFocus
           />
           <button className="kn-btn kn-btn--primary" onClick={save}>
-            Save
+            {t("deal.save")}
           </button>
           <button
             className="kn-btn kn-btn--ghost"
@@ -315,7 +331,7 @@ function DealHeader({
               setEditing(false);
             }}
           >
-            Cancel
+            {t("deal.cancel")}
           </button>
         </div>
       ) : (
@@ -329,18 +345,18 @@ function DealHeader({
                 setEditing(true);
               }}
             >
-              Rename
+              {t("deal.rename")}
             </button>
             {confirmDelete ? (
               <>
                 <button className="kn-btn kn-btn--danger" onClick={onDeleted}>
-                  Confirm delete
+                  {t("deal.confirmDelete")}
                 </button>
                 <button
                   className="kn-btn kn-btn--ghost"
                   onClick={() => setConfirmDelete(false)}
                 >
-                  Cancel
+                  {t("deal.cancel")}
                 </button>
               </>
             ) : (
@@ -348,14 +364,14 @@ function DealHeader({
                 className="kn-btn kn-btn--ghost"
                 onClick={() => setConfirmDelete(true)}
               >
-                Delete report
+                {t("deal.deleteReport")}
               </button>
             )}
           </div>
         </>
       )}
       {!editing && (
-        <p className="kn-flow-sub">Last updated {fmtDate(deal.updated_at)}</p>
+        <p className="kn-flow-sub">{t("deal.lastUpdated", { date: fmtDate(deal.updated_at) })}</p>
       )}
     </div>
   );
@@ -375,14 +391,15 @@ function SourcesPanel({
   onChanged: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const { t } = useT();
 
   const remove = async (s: DealSource) => {
     try {
       await removeSource(s.id);
-      showToast("Source removed");
+      showToast(t("deal.sourceRemoved"));
       onChanged();
     } catch (e) {
-      showToast(`Remove failed: ${String(e)}`);
+      showToast(t("deal.sourceRemoveFailed", { error: String(e) }));
     }
   };
 
@@ -390,18 +407,17 @@ function SourcesPanel({
     <section className="kn-deal-panel">
       <div className="kn-deal-panel-head">
         <h3 className="kn-deal-panel-title">
-          Sources <span className="kn-deal-panel-count">{sources.length}</span>
+          {t("deal.sourcesTitle")} <span className="kn-deal-panel-count">{sources.length}</span>
         </h3>
         {!adding && (
           <button className="kn-btn kn-btn--ghost" onClick={() => setAdding(true)}>
-            + Add source
+            {t("deal.addSource")}
           </button>
         )}
       </div>
 
       <p className="kn-deal-panel-hint">
-        Everything the report has accumulated — decks, text, links. A new version
-        is generated from all of these at once.
+        {t("deal.sourcesHint")}
       </p>
 
       {adding && (
@@ -418,7 +434,7 @@ function SourcesPanel({
 
       {sources.length === 0 ? (
         <p className="kn-sidebar-empty">
-          No sources yet. Add a deck, paste text, or drop a URL to get started.
+          {t("deal.sourcesEmpty")}
         </p>
       ) : (
         <ul className="kn-deal-source-list">
@@ -438,8 +454,8 @@ function SourcesPanel({
               <button
                 className="kn-deal-source-del"
                 onClick={() => remove(s)}
-                title="Remove source"
-                aria-label="Remove source"
+                title={t("deal.removeSourceTooltip")}
+                aria-label={t("deal.removeSourceTooltip")}
               >
                 ×
               </button>
@@ -469,6 +485,7 @@ function AddSourceForm({
   const [textName, setTextName] = useState("");
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const { t } = useT();
 
   const canAdd =
     !busy &&
@@ -487,18 +504,18 @@ function AddSourceForm({
           const b64 = await fileToBase64(f);
           await addSource(dealId, "pdf", f.name, b64);
         }
-        showToast(files.length === 1 ? "Deck added" : `${files.length} files added`);
+        showToast(files.length === 1 ? t("deal.deckAdded") : t("deal.filesAdded", { n: files.length }));
       } else if (mode === "text") {
-        await addSource(dealId, "text", textName.trim() || "Pasted text", text.trim());
-        showToast("Text added");
+        await addSource(dealId, "text", textName.trim() || t("deal.pastedText"), text.trim());
+        showToast(t("deal.textAdded"));
       } else {
         const u = url.trim();
         await addSource(dealId, "url", u, u);
-        showToast("URL added");
+        showToast(t("deal.urlAdded"));
       }
       onDone();
     } catch (e) {
-      showToast(`Add failed: ${String(e)}`);
+      showToast(t("deal.addFailed", { error: String(e) }));
       setBusy(false);
     }
   };
@@ -516,7 +533,7 @@ function AddSourceForm({
           className={`kn-tab ${mode === "text" ? "kn-tab--active" : ""}`}
           onClick={() => setMode("text")}
         >
-          Pasted text
+          {t("deal.addSourceTextTab")}
         </button>
         <button
           className={`kn-tab ${mode === "url" ? "kn-tab--active" : ""}`}
@@ -537,7 +554,7 @@ function AddSourceForm({
               style={{ display: "none" }}
             />
             <span className="kn-btn kn-btn--ghost">
-              {files.length ? "Choose other PDFs…" : "Choose PDF file(s)…"}
+              {files.length ? t("deal.addSourceChooseOtherPdfs") : t("deal.addSourceChoosePdfs")}
             </span>
           </label>
           {files.length > 0 ? (
@@ -546,7 +563,7 @@ function AddSourceForm({
             </span>
           ) : (
             <span className="kn-pdf-hint">
-              Pitch deck, data room exports, supplements. Text-based PDFs only.
+              {t("deal.addSourcePdfHint")}
             </span>
           )}
         </div>
@@ -558,13 +575,13 @@ function AddSourceForm({
             className="kn-input"
             value={textName}
             onChange={(e) => setTextName(e.target.value)}
-            placeholder="Label (optional) — e.g. founder email, call notes"
+            placeholder={t("deal.addSourceTextLabelPh")}
           />
           <textarea
             className="kn-input kn-input--textarea"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Paste website copy, founder bio, deck text, data-room notes…"
+            placeholder={t("deal.addSourceTextPh")}
             rows={5}
             spellCheck={false}
           />
@@ -577,7 +594,7 @@ function AddSourceForm({
           className="kn-input"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://acme.com or arxiv.org/abs/..."
+          placeholder={t("source.urlPlaceholder")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -585,10 +602,10 @@ function AddSourceForm({
 
       <div className="kn-form-actions" style={{ marginTop: 12 }}>
         <button className="kn-btn kn-btn--primary" onClick={submit} disabled={!canAdd}>
-          {busy ? "Adding…" : "Add to report"}
+          {busy ? t("deal.adding") : t("deal.addToReport")}
         </button>
         <button className="kn-btn kn-btn--ghost" onClick={onCancel} disabled={busy}>
-          Cancel
+          {t("deal.cancel")}
         </button>
       </div>
     </div>
@@ -608,11 +625,12 @@ function VersionsPanel({
   onNewVersion: () => void;
   canGenerate: boolean;
 }) {
+  const { t } = useT();
   return (
     <section className="kn-deal-panel">
       <div className="kn-deal-panel-head">
         <h3 className="kn-deal-panel-title">
-          Versions{" "}
+          {t("deal.versionsTitle")}{" "}
           <span className="kn-deal-panel-count">{versions.length}</span>
         </h3>
         <button
@@ -621,22 +639,21 @@ function VersionsPanel({
           disabled={!canGenerate}
           title={
             canGenerate
-              ? "Generate a new version from all sources"
-              : "Add a source first"
+              ? t("deal.newVersionTip")
+              : t("deal.newVersionTipDisabled")
           }
         >
-          + New version
+          {t("deal.newVersion")}
         </button>
       </div>
 
       <p className="kn-deal-panel-hint">
-        The report's history. Each version is a full re-generate from all sources
-        at that point in time. Newest first.
+        {t("deal.versionsHint")}
       </p>
 
       {versions.length === 0 ? (
         <p className="kn-sidebar-empty">
-          No versions yet. Add a source, then hit “New version”.
+          {t("deal.versionsEmpty")}
         </p>
       ) : (
         <ul className="kn-deal-version-list">
@@ -645,7 +662,7 @@ function VersionsPanel({
               <button
                 className="kn-deal-version-main"
                 onClick={() => onOpen(v.id)}
-                title={`Open v${v.seq}`}
+                title={t("deal.versionOpenTip", { n: v.seq })}
               >
                 <span className="kn-deal-version-seq">v{v.seq}</span>
                 <div className="kn-deal-version-body">
@@ -653,8 +670,8 @@ function VersionsPanel({
                     {v.note || `v${v.seq}`}
                   </span>
                   <span className="kn-deal-version-meta">
-                    {v.kind === "ic" ? "IC report" : "Memo"}
-                    {v.provider ? ` · ${PROVIDER_LABELS[v.provider] ?? v.provider}` : ""}
+                    {v.kind === "ic" ? t("deal.kindIc") : t("deal.kindMemo")}
+                    {v.provider ? ` · ${providerLabel(v.provider, t)}` : ""}
                     {v.created_at ? ` · ${fmtDate(v.created_at)}` : ""}
                   </span>
                 </div>
@@ -695,6 +712,7 @@ function VersionViewer({
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState<null | "pdf" | "docx">(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const { t } = useT();
 
   // Re-sync the edit buffer if the underlying version changes (e.g. re-opened).
   const versionId = version.id;
@@ -715,11 +733,11 @@ function VersionViewer({
     setSaving(true);
     try {
       await updateVersionContent(version.id, draft);
-      showToast("Version updated");
+      showToast(t("deal.versionUpdated"));
       setEditing(false);
       onSaved();
     } catch (e) {
-      showToast(`Save failed: ${String(e)}`);
+      showToast(t("deal.saveFailed", { error: String(e) }));
     } finally {
       setSaving(false);
     }
@@ -727,7 +745,7 @@ function VersionViewer({
 
   const handleCopy = () => {
     navigator.clipboard.writeText(version.content);
-    showToast("Version copied");
+    showToast(t("deal.versionCopied"));
   };
 
   const handleExportPdf = async () => {
@@ -737,7 +755,7 @@ function VersionViewer({
       const ok = await exportReportToPdf(asReport());
       if (ok) showToast("Opening print dialog — choose “Save as PDF”");
     } catch {
-      showToast("PDF export failed");
+      showToast(t("generate.pdfFailed"));
     } finally {
       setExporting(null);
     }
@@ -748,9 +766,9 @@ function VersionViewer({
     setExporting("docx");
     try {
       const saved = await exportReportToDocx(asReport());
-      if (saved) showToast("Word document saved");
+      if (saved) showToast(t("generate.docxSaved"));
     } catch {
-      showToast("DOCX export failed");
+      showToast(t("generate.docxFailed"));
     } finally {
       setExporting(null);
     }
@@ -759,17 +777,17 @@ function VersionViewer({
   const handleDelete = async () => {
     try {
       await deleteVersion(version.id);
-      showToast("Version deleted");
+      showToast(t("deal.versionDeleted"));
       onDeleted();
     } catch (e) {
-      showToast(`Delete failed: ${String(e)}`);
+      showToast(t("deal.deleteFailed", { error: String(e) }));
     }
   };
 
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
-        ← Back to report
+        {t("deal.backToReport")}
       </button>
 
       <h2 className="kn-flow-title">
@@ -778,9 +796,9 @@ function VersionViewer({
       <p className="kn-flow-sub">
         {version.note || `v${version.seq}`}
         {" · "}
-        {version.kind === "ic" ? "IC report" : "Memo"}
+        {version.kind === "ic" ? t("common.dealFallbackIc") : t("common.dealFallbackMemo")}
         {version.provider
-          ? ` · ${PROVIDER_LABELS[version.provider] ?? version.provider}`
+          ? ` · ${providerLabel(version.provider, t)}`
           : ""}
         {version.created_at ? ` · ${fmtDate(version.created_at)}` : ""}
       </p>
@@ -793,7 +811,7 @@ function VersionViewer({
               onClick={handleSave}
               disabled={saving}
             >
-              {saving ? "Saving…" : "Save changes"}
+              {saving ? "Saving…" : t("deal.saveChanges")}
             </button>
             <button
               className="kn-btn kn-btn--ghost"
@@ -803,38 +821,38 @@ function VersionViewer({
               }}
               disabled={saving}
             >
-              Cancel
+              {t("deal.cancel")}
             </button>
           </>
         ) : (
           <>
             <button className="kn-btn" onClick={() => setEditing(true)}>
-              Edit
+              {t("deal.editBtn")}
             </button>
             <button className="kn-btn" onClick={handleCopy}>
-              Copy
+              {t("deal.copyBtn")}
             </button>
             <button className="kn-btn" onClick={handleExportPdf} disabled={!!exporting}>
-              {exporting === "pdf" ? "Exporting…" : "Export PDF"}
+              {exporting === "pdf" ? t("generate.exportingPdf") : t("generate.exportPdf")}
             </button>
             <button className="kn-btn" onClick={handleExportDocx} disabled={!!exporting}>
-              {exporting === "docx" ? "Exporting…" : "Export DOCX"}
+              {exporting === "docx" ? t("generate.exportingPdf") : t("generate.exportDocx")}
             </button>
             {confirmDelete ? (
               <>
                 <button className="kn-btn kn-btn--danger" onClick={handleDelete}>
-                  Confirm delete
+                  {t("deal.confirmDelete")}
                 </button>
                 <button
                   className="kn-btn kn-btn--ghost"
                   onClick={() => setConfirmDelete(false)}
                 >
-                  Cancel
+                  {t("deal.cancel")}
                 </button>
               </>
             ) : (
               <button className="kn-btn" onClick={() => setConfirmDelete(true)}>
-                Delete version
+                {t("deal.deleteVersion")}
               </button>
             )}
           </>
@@ -843,14 +861,14 @@ function VersionViewer({
 
       {editing ? (
         <div className="kn-result">
-          <h3 className="kn-result-title">Edit markdown</h3>
+          <h3 className="kn-result-title">{t("deal.editMarkdown")}</h3>
           <textarea
             className="kn-prose kn-prose--editable"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
           />
-          <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
+          <h3 className="kn-result-title kn-result-title--secondary">{t("quickMemo.preview")}</h3>
           <div className="kn-markdown">
             <MarkdownView source={draft} />
           </div>
@@ -920,6 +938,7 @@ function NewVersionModal({
   const [note, setNote] = useState(`v${nextSeq} · ${sourceCount} sources`);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const { t } = useT();
 
   const generate = async () => {
     setRunning(true);
@@ -947,9 +966,9 @@ function NewVersionModal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Generate a new version"
+        aria-label={t("newVersion.dialogAria")}
       >
-        <h3 className="kn-result-title">New version</h3>
+        <h3 className="kn-result-title">{t("newVersion.title")}</h3>
         <p className="kn-flow-sub">
           Re-generates from all {sourceCount} source{sourceCount === 1 ? "" : "s"}{" "}
           in this report. This will be v{nextSeq}.
@@ -957,37 +976,41 @@ function NewVersionModal({
 
         <div className="kn-flow-row">
           <label className="kn-label">
-            Report kind
+            {t("newVersion.kindLabel")}
             <select
               className="kn-input kn-input--select"
               value={kind}
               onChange={(e) => setKind(e.target.value as VersionKind)}
               disabled={running}
             >
-              <option value="memo">Quick Memo (~2-page)</option>
-              <option value="ic">Full IC (5 sections)</option>
+              <option value="memo">{t("newVersion.kindMemoOpt")}</option>
+              <option value="ic">{t("newVersion.kindIcOpt")}</option>
             </select>
           </label>
 
           <label className="kn-label">
-            Template
+            {t("quickMemo.templateLabel")}
             <select
               className="kn-input kn-input--select"
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
               disabled={running}
             >
-              <option value="">Built-in {kind === "ic" ? "IC" : "memo"}</option>
-              {templateOptions.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              <option value="">
+                {t("newVersion.templateBuiltIn", {
+                  kind: kind === "ic" ? t("newVersion.templateBuiltInIc") : t("newVersion.templateBuiltInMemo"),
+                })}
+              </option>
+              {templateOptions.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>
+                  {tpl.name}
                 </option>
               ))}
             </select>
           </label>
 
           <label className="kn-label">
-            Run with
+            {t("provider.runWith")}
             <select
               className="kn-input kn-input--select"
               value={provider}
@@ -995,11 +1018,11 @@ function NewVersionModal({
               disabled={running}
             >
               {availableProviders.length === 0 ? (
-                <option value="">(no provider)</option>
+                <option value="">{t("newVersion.noProviderOpt")}</option>
               ) : (
                 availableProviders.map((p) => (
                   <option key={p} value={p}>
-                    {PROVIDER_LABELS[p] ?? p}
+                    {providerLabel(p, t)}
                   </option>
                 ))
               )}
@@ -1009,14 +1032,12 @@ function NewVersionModal({
 
         {hasPdfSource && isTextOnlyProvider(provider) && (
           <div className="kn-advisory" role="status">
-            ⚠️ This model reads text only — image/scanned PDFs (most pitch decks)
-            extract almost nothing. Use a vision provider (VHS-hosted, Claude, or
-            Gemini) to read decks.
+            {t("common.textOnlyPdfWarning")}
           </div>
         )}
 
         <label className="kn-label kn-label--grow">
-          Note (shown in the version list)
+          {t("newVersion.noteLabel")}
           <input
             className="kn-input"
             value={note}
@@ -1031,9 +1052,9 @@ function NewVersionModal({
             <div className="kn-gen-step kn-gen-step--run">
               <span className="kn-gen-dot" />
               {kind === "ic"
-                ? "Writing IC sections from all sources… this can take a minute."
-                : "Drafting the memo from all sources…"}
-              <span className="kn-gen-run"> · generating…</span>
+                ? t("newVersion.progressIc")
+                : t("newVersion.progressMemo")}
+              <span className="kn-gen-run"> {t("newVersion.progressSuffix")}</span>
             </div>
           </div>
         )}
@@ -1048,10 +1069,10 @@ function NewVersionModal({
             onClick={generate}
             disabled={running || availableProviders.length === 0}
           >
-            {running ? "Generating…" : "Generate version"}
+            {running ? t("newVersion.generating") : t("newVersion.generate")}
           </button>
           <button className="kn-btn kn-btn--ghost" onClick={onClose} disabled={running}>
-            Cancel
+            {t("deal.cancel")}
           </button>
         </div>
       </div>

@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { ChartRenderer, type ChartSpec } from "./ChartRenderer";
 import { BlockView } from "./templates/BlockView";
 import { TemplateDesigner } from "./templates/TemplateDesigner";
-import { useT } from "./i18n";
+import { useT, translate } from "./i18n";
 import { LangToggle } from "./i18n/LangToggle";
 import {
   getAllTemplates,
@@ -293,14 +293,6 @@ const PROVIDER_HINTS: Record<ByoProvider, string> = {
 const IC_SECTIONS = ["founder", "market", "traction", "terms", "compile"] as const;
 type IcSection = (typeof IC_SECTIONS)[number];
 
-const IC_LABELS: Record<IcSection, string> = {
-  founder: "Founder & Team",
-  market: "Market",
-  traction: "Product & Traction",
-  terms: "Round & Terms",
-  compile: "Compiled Memo",
-};
-
 type IcSectionResult = { section: IcSection; content: string };
 
 // ─── Templates (W3 R6) ───────────────────────────────────────────────
@@ -398,7 +390,7 @@ async function buildRunSource(
     return { kind: "url", name: url.trim(), content: url.trim() };
   }
   if (mode === "text" && text.trim()) {
-    return { kind: "text", name: "Pasted text", content: text.trim() };
+    return { kind: "text", name: translate("deal.pastedText"), content: text.trim() };
   }
   if (mode === "pdf" && pdfFile) {
     const b64 = await fileToBase64(pdfFile);
@@ -437,7 +429,7 @@ function formatQuota(q: HostedQuota): string {
   if (q.limit > 0) {
     return `VHS-hosted · ${q.used}/${q.limit} reports used this month`;
   }
-  return "VHS-hosted report generated";
+  return translate("quota.generated");
 }
 
 // W5 — usage gauge data, normalised by the Rust `vhs_usage` command across the
@@ -965,6 +957,7 @@ function UsageGauge({
   // "panel" = Home card; "compact" = sidebar footer.
   variant?: "panel" | "compact";
 }) {
+  const { t } = useT();
   const [showGuide, setShowGuide] = useState(false);
   if (!usage) return null;
 
@@ -973,20 +966,20 @@ function UsageGauge({
   return (
     <div className={`kn-usage kn-usage--${variant}`}>
       <div className="kn-usage-head">
-        <span className="kn-usage-eyebrow">VHS hosted</span>
+        <span className="kn-usage-eyebrow">{t("usage.eyebrow")}</span>
         <button
           type="button"
           className="kn-usage-help"
           onClick={() => setShowGuide(true)}
-          title="How hosted usage works"
-          aria-label="How hosted usage works"
+          title={t("usage.helpTitle")}
+          aria-label={t("usage.helpTitle")}
         >
           ?
         </button>
       </div>
 
       <div className="kn-usage-count">
-        Reports this month: <strong>{usage.reports_this_month}</strong>
+        {t("usage.reportsThisMonth")} <strong>{usage.reports_this_month}</strong>
         {usage.month_label ? (
           <span className="kn-usage-month"> · {usage.month_label}</span>
         ) : null}
@@ -998,7 +991,7 @@ function UsageGauge({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={pct}
-        aria-label="Monthly hosted usage"
+        aria-label={t("usage.gaugeAriaLabel")}
       >
         <div
           className={`kn-usage-bar-fill ${usage.at_limit ? "kn-usage-bar-fill--full" : ""}`}
@@ -1008,7 +1001,7 @@ function UsageGauge({
 
       {usage.at_limit ? (
         <div className="kn-usage-note kn-usage-note--limit">
-          Monthly hosted generation used — resets next month.
+          {t("usage.atLimit")}
         </div>
       ) : usage.projected_monthly_reports != null ? (
         <div className="kn-usage-note">
@@ -1025,6 +1018,7 @@ function UsageGauge({
 // In-app usage guide (W5 manual). NO dollar amounts. Reachable from the gauge's
 // "?" button. Plain modal reusing the existing kn- modal/overlay tokens.
 function UsageGuide({ onClose }: { onClose: () => void }) {
+  const { t } = useT();
   return (
     <div className="kn-modal-overlay" onClick={onClose}>
       <div
@@ -1032,23 +1026,17 @@ function UsageGuide({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Hosted usage guide"
+        aria-label={t("usage.guideAriaLabel")}
       >
-        <h3 className="kn-usage-guide-title">Hosted reports</h3>
+        <h3 className="kn-usage-guide-title">{t("usage.guideTitle")}</h3>
         <p>
           Hosted reports run on VHS&apos;s AI — no API key needed. Your plan
           includes generous monthly report generation.
         </p>
-        <p>
-          The leaner and more focused your prompts, the cheaper each report, so
-          efficient prompts let you generate <strong>more</strong> reports per
-          month. Tested with efficient prompts, you can produce at least{" "}
-          <strong>80 full IC memos</strong> per month (and{" "}
-          <strong>500+ quick memos</strong>).
-        </p>
-        <p>Watch the usage gauge to find your best setup.</p>
+        <p>{t("usage.guideP2")}</p>
+        <p>{t("usage.guideP3")}</p>
         <button type="button" className="kn-btn kn-btn--ghost" onClick={onClose}>
-          Got it
+          {t("usage.guideAck")}
         </button>
       </div>
     </div>
@@ -1070,19 +1058,20 @@ function Home({
   onOpenTemplates: () => void;
   usage: HostedUsage | null;
 }) {
+  const { t } = useT();
   return (
     <div className="kn-home">
-      <h1 className="kn-hero-title">Desktop IC copilot for VHS</h1>
+      <h1 className="kn-hero-title">{t("home.heroTitle")}</h1>
       <p className="kn-hero-sub">
         {hasAnyKey ? (
-          "Pick a flow."
+          t("home.heroSubReady")
         ) : (
           <>
-            Connect an LLM in{" "}
+            {t("home.heroSubEmptyPrefix")}
             <button className="kn-inline-link" onClick={onOpenSettings}>
-              Settings
-            </button>{" "}
-            to start.
+              {t("home.heroSubEmptySettings")}
+            </button>
+            {t("home.heroSubEmptySuffix")}
           </>
         )}
       </p>
@@ -1090,29 +1079,20 @@ function Home({
       <div className="kn-card-grid">
         <button className="kn-card kn-card--gold" onClick={() => onPick("quickmemo")}>
           <div className="kn-card-emoji">⚡</div>
-          <div className="kn-card-title">Quick Memo</div>
-          <div className="kn-card-body">
-            Drop a URL or company name. Out comes a 2-page memo in your firm&apos;s voice.
-            ~5 min.
-          </div>
+          <div className="kn-card-title">{t("home.cardQuickMemoTitle")}</div>
+          <div className="kn-card-body">{t("home.cardQuickMemoBody")}</div>
         </button>
 
         <button className="kn-card kn-card--teal" onClick={() => onPick("icreport")}>
           <div className="kn-card-emoji">📊</div>
-          <div className="kn-card-title">Full IC Report</div>
-          <div className="kn-card-body">
-            Multi-step deep dive. Founder, market, traction, terms. Iterate
-            section-by-section. ~30 min.
-          </div>
+          <div className="kn-card-title">{t("home.cardIcTitle")}</div>
+          <div className="kn-card-body">{t("home.cardIcBody")}</div>
         </button>
 
         <button className="kn-card kn-card--wide" onClick={onOpenTemplates}>
           <div className="kn-card-emoji">▦</div>
-          <div className="kn-card-title">Report templates</div>
-          <div className="kn-card-body">
-            Browse the simple and full layouts your reports are built from. Each
-            is a stack of blocks — soon drag-and-drop editable.
-          </div>
+          <div className="kn-card-title">{t("home.cardTemplatesTitle")}</div>
+          <div className="kn-card-body">{t("home.cardTemplatesBody")}</div>
         </button>
       </div>
 
@@ -1188,11 +1168,7 @@ function Settings({
 
       <section className="kn-section">
         <h3 className="kn-section-title">{t("settings.llmConnection")}</h3>
-        <p className="kn-section-body">
-          Pick how KN33C4P talks to a model. Costs metered to your account or
-          machine. Bring your own key, run a local model, or link your VHS
-          account to use the bundled hosted model.
-        </p>
+        <p className="kn-section-body">{t("settings.llmBody")}</p>
 
         <ByoKeyOption
           configuredProviders={configuredProviders}
@@ -1221,14 +1197,9 @@ function Settings({
 
       <section className="kn-section">
         <h3 className="kn-section-title">{t("settings.templateEditor")}</h3>
-        <p className="kn-section-body">
-          Override the built-in prompt for any template / section combination.
-          Your customisations stay on this Mac (localStorage); empty fields
-          fall back to the default. Visual layout designer (logo / fonts /
-          drag-drop blocks per R3) lands in wave 3.3.
-        </p>
+        <p className="kn-section-body">{t("settings.templateEditorBody")}</p>
         <button className="kn-btn kn-btn--primary" onClick={onOpenTemplateEditor}>
-          Open template editor →
+          {t("settings.templateEditorButton")}
         </button>
       </section>
 
@@ -1256,7 +1227,7 @@ function Settings({
             vhs.capital
           </a>
           <br />
-          Repo: github.com/duckm45t3r/kneecap (private)
+          {t("settings.aboutRepo")}
         </p>
       </section>
     </div>
@@ -1321,6 +1292,7 @@ function FormatLearningOption({
   showToast: (m: string) => void;
   onTemplatesLearned: () => void;
 }) {
+  const { t } = useT();
   // Providers that are BOTH usable for Format Learning AND configured.
   const usableProviders = LEARN_PROVIDERS.filter((p) =>
     configuredProviders.includes(p),
@@ -1372,7 +1344,7 @@ function FormatLearningOption({
     const rejected: string[] = [];
     for (const f of incoming) {
       if (!isPdfFile(f) && !isTextFile(f)) {
-        rejected.push(`${f.name} (use PDF or text)`);
+        rejected.push(t("learn.rejectedUse", { name: f.name }));
         continue;
       }
       if (isPdfFile(f) && f.size > LEARN_MAX_PDF_BYTES) {
@@ -1395,7 +1367,7 @@ function FormatLearningOption({
       return merged.slice(0, LEARN_MAX_FILES);
     });
     if (rejected.length > 0) {
-      setError(`Skipped: ${rejected.join("; ")}`);
+      setError(t("learn.skipped", { list: rejected.join("; ") }));
     }
     // Allow re-picking the same file later.
     if (inputRef.current) inputRef.current.value = "";
@@ -1411,7 +1383,7 @@ function FormatLearningOption({
     setBusy(true);
     setError(null);
     setOutcomes(null);
-    setProgress("Reading files…");
+    setProgress(t("learn.readingFiles"));
 
     try {
       // Build the per-example payloads. A PDF goes as base64 (routed natively for
@@ -1428,7 +1400,7 @@ function FormatLearningOption({
       }
 
       setProgress(
-        `Studying ${examples.length} ${examples.length === 1 ? "document" : "documents"} with ${PROVIDER_LABELS[provider]}…`,
+        `Studying ${examples.length} ${examples.length === 1 ? t("learn.document") : t("learn.documents")} with ${PROVIDER_LABELS[provider]}…`,
       );
 
       const results = await invoke<InferResultPayload[]>("infer_templates", {
@@ -1444,7 +1416,7 @@ function FormatLearningOption({
           collected.push({
             name: r.name,
             ok: false,
-            detail: r.error ?? "No template returned",
+            detail: r.error ?? t("learn.noneReturned"),
           });
           continue;
         }
@@ -1463,7 +1435,7 @@ function FormatLearningOption({
             name: r.name,
             ok: false,
             detail:
-              e instanceof Error ? e.message : "Could not read the model's template",
+              e instanceof Error ? e.message : t("learn.cantRead"),
           });
         }
       }
@@ -1476,7 +1448,7 @@ function FormatLearningOption({
           `Learned ${savedCount} ${savedCount === 1 ? "template" : "templates"}`,
         );
       } else {
-        showToast("No templates learned — see details");
+        showToast(t("learn.noneLearned"));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1492,13 +1464,12 @@ function FormatLearningOption({
     <div className="kn-fl">
       {noUsableProvider ? (
         <p className="kn-form-feedback kn-form-feedback--err">
-          Connect a provider above first — link VHS-hosted, bring your own key
-          (Anthropic, OpenAI, Gemini, Nvidia), or run Local.
+          {t("learn.noProvider")}
         </p>
       ) : (
         <>
           <label className="kn-label">
-            Learn with
+            {t("learn.learnWith")}
             <select
               className="kn-input kn-input--select"
               value={provider}
@@ -1529,7 +1500,7 @@ function FormatLearningOption({
                 style={{ display: "none" }}
               />
               <span className="kn-btn kn-btn--ghost">
-                {files.length > 0 ? "Add more files…" : "Choose files (5–10)…"}
+                {files.length > 0 ? t("learn.addMoreFiles") : t("learn.chooseFiles")}
               </span>
             </label>
             <span className="kn-pdf-hint">
@@ -1551,7 +1522,7 @@ function FormatLearningOption({
                     className="kn-fl-file-x"
                     onClick={() => removeFile(i)}
                     disabled={busy}
-                    aria-label={`Remove ${f.name}`}
+                    aria-label={t("learn.removeFile", { name: f.name })}
                   >
                     ✕
                   </button>
@@ -1566,7 +1537,7 @@ function FormatLearningOption({
               onClick={learn}
               disabled={busy || files.length === 0}
             >
-              {busy ? "Learning…" : "Learn from these"}
+              {busy ? t("learn.learning") : t("learn.learn")}
             </button>
           </div>
 
@@ -1609,6 +1580,7 @@ function ProviderToggle({
   providerEnabled: Partial<Record<Provider, boolean>>;
   toggleProviderEnabled: (p: Provider, enabled: boolean) => void;
 }) {
+  const { t } = useT();
   const enabled = isProviderEnabled(providerEnabled, provider);
   return (
     <button
@@ -1617,12 +1589,12 @@ function ProviderToggle({
       aria-checked={enabled}
       className={`kn-provider-toggle ${enabled ? "kn-provider-toggle--on" : ""}`}
       onClick={() => toggleProviderEnabled(provider, !enabled)}
-      title={enabled ? "Disable this provider" : "Enable this provider"}
+      title={enabled ? t("providerToggle.disable") : t("providerToggle.enable")}
     >
       <span className="kn-provider-toggle-track">
         <span className="kn-provider-toggle-thumb" />
       </span>
-      <span className="kn-provider-toggle-text">{enabled ? "On" : "Off"}</span>
+      <span className="kn-provider-toggle-text">{enabled ? t("providerToggle.on") : t("providerToggle.off")}</span>
     </button>
   );
 }
@@ -1642,6 +1614,7 @@ function ByoKeyOption({
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
+  const { t } = useT();
   const [provider, setProvider] = useState<ByoProvider>("anthropic");
   const [draft, setDraft] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -1658,9 +1631,9 @@ function ByoKeyOption({
       setDraft("");
       setTest({ kind: "idle" });
       await refresh();
-      showToast(`${PROVIDER_LABELS[provider]} key saved`);
+      showToast(t("byo.keySaved", { provider: PROVIDER_LABELS[provider] }));
     } catch (e) {
-      showToast(`Save failed: ${String(e)}`);
+      showToast(t("byo.keySaveFailed", { error: String(e) }));
     } finally {
       setSaving(false);
     }
@@ -1683,9 +1656,9 @@ function ByoKeyOption({
         await invoke("delete_api_key", { provider: p });
         await refresh();
         setTest({ kind: "idle" });
-        showToast(`${PROVIDER_LABELS[p]} key removed`);
+        showToast(t("byo.keyRemoved", { provider: PROVIDER_LABELS[p] }));
       } catch (e) {
-        showToast(`Remove failed: ${String(e)}`);
+        showToast(t("byo.keyRemoveFailed", { error: String(e) }));
       }
       setPendingRemove(null);
     } else {
@@ -1697,17 +1670,14 @@ function ByoKeyOption({
   return (
     <div className="kn-option">
       <div className="kn-option-title">
-        <span className="kn-tag">A</span> Bring your own key
+        <span className="kn-tag">{t("byo.tag")}</span> {t("byo.title")}
       </div>
-      <div className="kn-option-body">
-        Anthropic / OpenAI API key stays on this Mac (macOS Keychain). Costs
-        metered to your account.
-      </div>
+      <div className="kn-option-body">{t("byo.body")}</div>
 
       <div className="kn-form">
         <div className="kn-form-row">
           <label className="kn-label">
-            Provider
+            {t("byo.providerLabel")}
             <select
               className="kn-input kn-input--select"
               value={provider}
@@ -1724,7 +1694,7 @@ function ByoKeyOption({
           </label>
 
           <label className="kn-label kn-label--grow">
-            API key
+            {t("byo.apiKeyLabel")}
             <div className="kn-input-wrap">
               <input
                 type={showKey ? "text" : "password"}
@@ -1739,9 +1709,9 @@ function ByoKeyOption({
                 type="button"
                 className="kn-eye-btn"
                 onClick={() => setShowKey((v) => !v)}
-                title={showKey ? "Hide key" : "Show key"}
+                title={showKey ? t("byo.hideKeyTitle") : t("byo.showKeyTitle")}
               >
-                {showKey ? "Hide" : "Show"}
+                {showKey ? t("byo.hideKey") : t("byo.showKey")}
               </button>
             </div>
           </label>
@@ -1753,15 +1723,15 @@ function ByoKeyOption({
             onClick={handleSave}
             disabled={!draft.trim() || saving}
           >
-            {saving ? "Saving…" : "Save key"}
+            {saving ? t("byo.saving") : t("byo.save")}
           </button>
           <button
             className="kn-btn"
             onClick={handleTest}
             disabled={!configuredProviders.includes(provider) || test.kind === "testing"}
-            title={!configuredProviders.includes(provider) ? "Save a key first" : ""}
+            title={!configuredProviders.includes(provider) ? t("byo.needSaveFirst") : ""}
           >
-            {test.kind === "testing" ? "Testing…" : "Test connection"}
+            {test.kind === "testing" ? t("byo.testing") : t("byo.test")}
           </button>
         </div>
 
@@ -1781,7 +1751,7 @@ function ByoKeyOption({
             <span className="kn-key-name">{PROVIDER_LABELS[p]}</span>
             {configuredProviders.includes(p) ? (
               <>
-                <span className="kn-key-status kn-key-status--on">connected</span>
+                <span className="kn-key-status kn-key-status--on">{t("byo.connected")}</span>
                 <ProviderToggle
                   provider={p}
                   providerEnabled={providerEnabled}
@@ -1793,11 +1763,11 @@ function ByoKeyOption({
                   }`}
                   onClick={() => handleRemove(p)}
                 >
-                  {pendingRemove === p ? "Confirm remove?" : "Remove"}
+                  {pendingRemove === p ? t("byo.confirmRemove") : t("byo.remove")}
                 </button>
               </>
             ) : (
-              <span className="kn-key-status kn-key-status--off">not configured</span>
+              <span className="kn-key-status kn-key-status--off">{t("byo.notConfigured")}</span>
             )}
           </div>
         ))}
@@ -1821,6 +1791,7 @@ function LocalModelOption({
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
+  const { t } = useT();
   const [baseUrl, setBaseUrl] = useState("http://localhost:11434");
   const [model, setModel] = useState(() => readLocalModelName() ?? "llama3.2");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
@@ -1840,9 +1811,9 @@ function LocalModelOption({
         window.localStorage.setItem(LOCAL_MODEL_KEY, model.trim());
       }
       await refresh();
-      showToast("Local config saved");
+      showToast(t("local.saved"));
     } catch (e) {
-      showToast(`Save failed: ${String(e)}`);
+      showToast(t("local.saveFailed", { error: String(e) }));
     } finally {
       setSaving(false);
     }
@@ -1862,17 +1833,16 @@ function LocalModelOption({
   return (
     <div className="kn-option">
       <div className="kn-option-title">
-        <span className="kn-tag">B</span> Local model (Ollama)
+        <span className="kn-tag">{t("local.tag")}</span> {t("local.title")}
       </div>
       <div className="kn-option-body">
-        Point KN33C4P at your local Ollama server. Zero outbound; slower than
-        cloud Sonnet but free.
+        {t("local.body")}
       </div>
 
       <div className="kn-form">
         <div className="kn-form-row">
           <label className="kn-label kn-label--grow">
-            Base URL
+            {t("local.baseUrl")}
             <input
               type="text"
               className="kn-input kn-input--mono"
@@ -1884,7 +1854,7 @@ function LocalModelOption({
             />
           </label>
           <label className="kn-label">
-            Model
+            {t("local.model")}
             <input
               type="text"
               className="kn-input kn-input--mono"
@@ -1903,14 +1873,14 @@ function LocalModelOption({
             onClick={handleSave}
             disabled={!baseUrl.trim() || !model.trim() || saving}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? t("local.saving") : t("local.save")}
           </button>
           <button
             className="kn-btn"
             onClick={handleTest}
             disabled={test.kind === "testing"}
           >
-            {test.kind === "testing" ? "Pinging…" : "Test ping"}
+            {test.kind === "testing" ? t("local.pinging") : t("local.testPing")}
           </button>
         </div>
 
@@ -1928,7 +1898,7 @@ function LocalModelOption({
         <div className="kn-key-row">
           <span className="kn-key-name">{PROVIDER_LABELS.local}</span>
           <span className={`kn-key-status ${isConfigured ? "kn-key-status--on" : "kn-key-status--off"}`}>
-            {isConfigured ? "configured" : "not configured"}
+            {isConfigured ? t("local.configured") : t("local.notConfigured")}
           </span>
           {isConfigured && (
             <ProviderToggle
@@ -1978,6 +1948,7 @@ function VhsHostedOption({
   refresh: () => Promise<void>;
   showToast: (m: string) => void;
 }) {
+  const { t } = useT();
   const [phase, setPhase] = useState<BindPhase>({ kind: "idle" });
 
   // Poll loop: while waiting, hit vhs_poll_device on the server's cadence
@@ -1992,7 +1963,7 @@ function VhsHostedOption({
     const tick = async () => {
       if (cancelled) return;
       if (Date.now() > deadline) {
-        setPhase({ kind: "error", message: "Code expired — start the connect again" });
+        setPhase({ kind: "error", message: t("vhs.codeExpired") });
         return;
       }
       try {
@@ -2005,7 +1976,7 @@ function VhsHostedOption({
           const who = status.slice("approved:".length);
           setPhase({ kind: "idle" });
           await refresh();
-          showToast(`VHS-hosted linked${who ? ` · ${who}` : ""}`);
+          showToast(who ? t("vhs.linkedToast", { name: who }) : "VHS-hosted linked");
           return;
         }
         // "pending" → schedule the next poll.
@@ -2038,41 +2009,38 @@ function VhsHostedOption({
       await invoke("vhs_unlink");
       await refresh();
       setPhase({ kind: "idle" });
-      showToast("VHS-hosted unlinked");
+      showToast(t("vhs.unlinkedToast"));
     } catch (e) {
-      showToast(`Unlink failed: ${String(e)}`);
+      showToast(t("vhs.unlinkFailed", { error: String(e) }));
     }
   };
 
   return (
     <div className="kn-option">
       <div className="kn-option-title">
-        <span className="kn-tag">C</span> VHS-hosted
+        <span className="kn-tag">{t("vhs.tag")}</span> {t("vhs.title")}
         {linked ? (
-          <span className="kn-pill kn-pill--ok">Linked</span>
+          <span className="kn-pill kn-pill--ok">{t("vhs.pillLinked")}</span>
         ) : (
-          <span className="kn-pill">No API key needed</span>
+          <span className="kn-pill">{t("vhs.pillNoKey")}</span>
         )}
       </div>
       <div className="kn-option-body">
-        Link your VHS account and KN33C4P uses the bundled hosted model — no
-        API key on this Mac. Hosted generation is included in your subscription:
-        at least 80 full reports a month with efficient prompts, and the leaner
-        your prompts, the more you get. Track it on the usage gauge.
+        {t("vhs.body")}
       </div>
 
       {linked ? (
         <div className="kn-key-list">
           <div className="kn-key-row">
             <span className="kn-key-name">{PROVIDER_LABELS.vhs}</span>
-            <span className="kn-key-status kn-key-status--on">linked</span>
+            <span className="kn-key-status kn-key-status--on">{t("vhs.linked")}</span>
             <ProviderToggle
               provider="vhs"
               providerEnabled={providerEnabled}
               toggleProviderEnabled={toggleProviderEnabled}
             />
             <button className="kn-link-btn" onClick={handleUnlink}>
-              Unlink
+              {t("vhs.unlink")}
             </button>
           </div>
         </div>
@@ -2081,21 +2049,29 @@ function VhsHostedOption({
           {phase.kind === "waiting" ? (
             <>
               <div className="kn-form-feedback">
-                1. A browser window opened to{" "}
-                <a href={phase.start.verification_url} target="_blank" rel="noreferrer">
-                  {phase.start.verification_url}
-                </a>
-                . Sign in to VHS if asked.
+                {(() => {
+                  const marker = " URL ";
+                  const [lead, trail] = t("vhs.waitingP1", { url: marker }).split(marker);
+                  return (
+                    <>
+                      {lead}
+                      <a href={phase.start.verification_url} target="_blank" rel="noreferrer">
+                        {phase.start.verification_url}
+                      </a>
+                      {trail}
+                    </>
+                  );
+                })()}
                 <br />
-                2. Enter this code in the browser:
+                {t("vhs.waitingP2")}
               </div>
               <div className="kn-device-code">{phase.start.user_code}</div>
               <div className="kn-form-feedback kn-form-feedback--muted">
-                Waiting for you to approve in the browser…
+                {t("vhs.waitingHint")}
               </div>
               <div className="kn-form-actions">
                 <button className="kn-btn" onClick={() => setPhase({ kind: "idle" })}>
-                  Cancel
+                  {t("vhs.cancel")}
                 </button>
               </div>
             </>
@@ -2107,7 +2083,7 @@ function VhsHostedOption({
                   onClick={handleConnect}
                   disabled={phase.kind === "starting"}
                 >
-                  {phase.kind === "starting" ? "Starting…" : "Connect to VHS"}
+                  {phase.kind === "starting" ? t("vhs.starting") : t("vhs.connect")}
                 </button>
               </div>
               {phase.kind === "error" && (
@@ -2147,6 +2123,7 @@ function QuickMemo({
   // Fold the finished memo into a deal (new or existing).
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
+  const { t } = useT();
   const provider = activeProvider;
   const setProvider = setActiveProvider;
   const [template, setTemplate] = useState<MemoTemplate>("simple-memo");
@@ -2220,7 +2197,7 @@ function QuickMemo({
   const handleCopy = () => {
     if (!memo) return;
     navigator.clipboard.writeText(memo);
-    showToast("Memo copied");
+    showToast(t("quickMemo.memoCopied"));
   };
 
   const handleSaveToDeal = async () => {
@@ -2232,24 +2209,22 @@ function QuickMemo({
       provider,
       templateId: "",
       source,
-      suggestedName: deriveDealName(memo, "Memo"),
+      suggestedName: deriveDealName(memo, t("common.dealFallbackMemo")),
     });
   };
 
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
-        ← Back
+        {t("common.back")}
       </button>
-      <h2 className="kn-flow-title">Quick Memo</h2>
+      <h2 className="kn-flow-title">{t("quickMemo.title")}</h2>
       <p className="kn-flow-sub">
-        URL or pasted text → one ~2-page memo. About 5 minutes including the
-        round-trip.
+        {t("quickMemo.sub")}
       </p>
 
       <div className="kn-disclaimer">
-        ⚠ Draft only — verify against the source before sharing or acting on it.
-        LLM output can be subtly wrong or steered by hostile pages.
+        {t("quickMemo.disclaimer")}
       </div>
 
       <div className="kn-flow-row">
@@ -2259,15 +2234,15 @@ function QuickMemo({
           configuredProviders={configuredProviders}
         />
         <label className="kn-label">
-          Template
+          {t("quickMemo.templateLabel")}
           <select
             className="kn-input kn-input--select"
             value={template}
             onChange={(e) => setTemplate(e.target.value as MemoTemplate)}
           >
-            {(Object.keys(MEMO_TEMPLATE_LABELS) as MemoTemplate[]).map((t) => (
-              <option key={t} value={t}>
-                {MEMO_TEMPLATE_LABELS[t]}
+            {(Object.keys(MEMO_TEMPLATE_LABELS) as MemoTemplate[]).map((tpl) => (
+              <option key={tpl} value={tpl}>
+                {tpl === "simple-memo" ? t("quickMemo.memoSimple") : t("quickMemo.memoFull")}
               </option>
             ))}
           </select>
@@ -2288,13 +2263,13 @@ function QuickMemo({
       <TextOnlyPdfWarning show={mode === "pdf" && isTextOnlyProvider(provider)} />
 
       <label className="kn-label kn-label--grow">
-        Note for the reader (optional)
+        {t("quickMemo.noteLabel")}
         <input
           type="text"
           className="kn-input"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="e.g. founder is Stanford ME PhD; we already passed on similar at $20M"
+          placeholder={t("quickMemo.notePlaceholder")}
         />
       </label>
 
@@ -2304,17 +2279,17 @@ function QuickMemo({
           onClick={handleRun}
           disabled={!canSubmit}
         >
-          {running ? "Drafting…" : "Draft memo"}
+          {running ? t("quickMemo.drafting") : t("quickMemo.draft")}
         </button>
         {memo && (
           <>
             {onSaveToDeal && (
               <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
-                Save to report
+                {t("quickMemo.saveToReport")}
               </button>
             )}
             <button className="kn-btn" onClick={handleCopy}>
-              Copy memo
+              {t("quickMemo.copyMemo")}
             </button>
           </>
         )}
@@ -2324,21 +2299,21 @@ function QuickMemo({
 
       {excerpt && (
         <details className="kn-collapse">
-          <summary>Source excerpt</summary>
+          <summary>{t("quickMemo.sourceExcerpt")}</summary>
           <pre className="kn-prose kn-prose--muted">{excerpt}…</pre>
         </details>
       )}
 
       {memo && (
         <div className="kn-result">
-          <h3 className="kn-result-title">Memo · raw</h3>
+          <h3 className="kn-result-title">{t("quickMemo.memoRaw")}</h3>
           <textarea
             className="kn-prose kn-prose--editable"
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
             spellCheck={false}
           />
-          <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
+          <h3 className="kn-result-title kn-result-title--secondary">{t("quickMemo.preview")}</h3>
           <div className="kn-markdown">
             <MarkdownView source={memo} />
           </div>
@@ -2370,6 +2345,7 @@ function IcReport({
   // Fold the compiled IC memo into a deal (new or existing).
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
+  const { t } = useT();
   const provider = activeProvider;
   const setProvider = setActiveProvider;
   const [template, setTemplate] = useState<IcTemplate>("simple-ic");
@@ -2481,10 +2457,46 @@ function IcReport({
     return pdfFile !== null;
   };
 
+  // Localized section/stage labels — kept as functions (rather than
+  // translating STAGE_LABELS in place) since STAGE_LABELS is a module-level
+  // const also consumed by the Template Editor, and useT() is only
+  // available inside component scope.
+  const sectionLabel = (s: IcSection): string => {
+    switch (s) {
+      case "founder":
+        return t("ic.sectionFounder");
+      case "market":
+        return t("ic.sectionMarket");
+      case "traction":
+        return t("ic.sectionTraction");
+      case "terms":
+        return t("ic.sectionTerms");
+      case "compile":
+        return t("ic.sectionCompile");
+    }
+  };
+
+  const stageLabel = (s: Stage): string => {
+    switch (s) {
+      case "":
+        return t("ic.stageAny");
+      case "pre-seed":
+        return t("ic.stagePreSeed");
+      case "seed":
+        return t("ic.stageSeed");
+      case "series-a":
+        return t("ic.stageSeriesA");
+      case "series-b":
+        return t("ic.stageSeriesB");
+      case "growth":
+        return t("ic.stageGrowth");
+    }
+  };
+
   const handleCopyCompile = () => {
     if (!sections.compile) return;
     navigator.clipboard.writeText(sections.compile);
-    showToast("Memo copied");
+    showToast(t("quickMemo.memoCopied"));
   };
 
   const handleSaveToDeal = async () => {
@@ -2497,20 +2509,18 @@ function IcReport({
       provider,
       templateId: "",
       source,
-      suggestedName: deriveDealName(compiled, "IC report"),
+      suggestedName: deriveDealName(compiled, t("common.dealFallbackIc")),
     });
   };
 
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
-        ← Back
+        {t("common.back")}
       </button>
-      <h2 className="kn-flow-title">Full IC Report</h2>
+      <h2 className="kn-flow-title">{t("ic.title")}</h2>
       <p className="kn-flow-sub">
-        {template === "simple-ic"
-          ? "3 passes: Founder → Market → Compile. ~10 minutes."
-          : "5 passes: Founder → Market → Traction → Terms → Compile. ~30 minutes."}
+        {template === "simple-ic" ? t("ic.subSimple") : t("ic.subFull")}
       </p>
 
       <div className="kn-disclaimer">
@@ -2531,15 +2541,15 @@ function IcReport({
             value={template}
             onChange={(e) => setTemplate(e.target.value as IcTemplate)}
           >
-            {(Object.keys(IC_TEMPLATE_LABELS) as IcTemplate[]).map((t) => (
-              <option key={t} value={t}>
-                {IC_TEMPLATE_LABELS[t]}
+            {(Object.keys(IC_TEMPLATE_LABELS) as IcTemplate[]).map((tpl) => (
+              <option key={tpl} value={tpl}>
+                {tpl === "simple-ic" ? t("ic.tplSimple") : t("ic.tplFull")}
               </option>
             ))}
           </select>
         </label>
         <label className="kn-label">
-          Stage
+          {t("ic.stageLabel")}
           <select
             className="kn-input kn-input--select"
             value={stage}
@@ -2547,7 +2557,7 @@ function IcReport({
           >
             {(Object.keys(STAGE_LABELS) as Stage[]).map((s) => (
               <option key={s} value={s}>
-                {STAGE_LABELS[s]}
+                {stageLabel(s)}
               </option>
             ))}
           </select>
@@ -2588,7 +2598,7 @@ function IcReport({
                 onClick={() => setActiveSection(s)}
               >
                 <span className="kn-step-num">{isDone ? "✓" : idx + 1}</span>
-                <span className="kn-step-label">{IC_LABELS[s]}</span>
+                <span className="kn-step-label">{sectionLabel(s)}</span>
               </button>
             </span>
           );
@@ -2597,7 +2607,7 @@ function IcReport({
 
       <div className="kn-section-edit">
         <label className="kn-label kn-label--grow">
-          Hints for {IC_LABELS[activeSection]} (optional)
+          {t("ic.hintsFor", { section: sectionLabel(activeSection) })}
           <input
             type="text"
             className="kn-input"
@@ -2607,14 +2617,14 @@ function IcReport({
             }
             placeholder={
               activeSection === "founder"
-                ? "things the source doesn't say (e.g. previous co. exited)"
+                ? t("ic.hintFounder")
                 : activeSection === "market"
-                  ? "specific incumbents to mention"
+                  ? t("ic.hintMarket")
                   : activeSection === "traction"
-                    ? "what you want spelled out (pipeline, LOIs)"
+                    ? t("ic.hintTraction")
                     : activeSection === "terms"
-                      ? "the asked-for check size"
-                      : "tone, voice, length"
+                      ? t("ic.hintTerms")
+                      : t("ic.hintCompile")
             }
           />
         </label>
@@ -2625,17 +2635,21 @@ function IcReport({
             onClick={() => runSection(activeSection)}
             disabled={!canRunSection(activeSection)}
           >
-            {running === activeSection ? "Drafting…" : sections[activeSection] ? "Re-draft" : "Draft section"}
+            {running === activeSection
+              ? t("quickMemo.drafting")
+              : sections[activeSection]
+                ? t("ic.redraft")
+                : t("ic.draftSection")}
           </button>
           {activeSection === "compile" && sections.compile && (
             <>
               {onSaveToDeal && (
                 <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
-                  Save to report
+                  {t("quickMemo.saveToReport")}
                 </button>
               )}
               <button className="kn-btn" onClick={handleCopyCompile}>
-                Copy memo
+                {t("quickMemo.copyMemo")}
               </button>
             </>
           )}
@@ -2647,7 +2661,9 @@ function IcReport({
 
         {sections[activeSection] !== undefined && (
           <div className="kn-result">
-            <h3 className="kn-result-title">{IC_LABELS[activeSection]} · raw</h3>
+            <h3 className="kn-result-title">
+              {t("ic.sectionRaw", { section: sectionLabel(activeSection) })}
+            </h3>
             <textarea
               className="kn-prose kn-prose--editable"
               value={sections[activeSection] ?? ""}
@@ -2656,7 +2672,7 @@ function IcReport({
               }
               spellCheck={false}
             />
-            <h3 className="kn-result-title kn-result-title--secondary">Preview</h3>
+            <h3 className="kn-result-title kn-result-title--secondary">{t("quickMemo.preview")}</h3>
             <div className="kn-markdown">
               <MarkdownView source={sections[activeSection] ?? ""} />
             </div>
@@ -2678,9 +2694,15 @@ function ProviderPicker({
   setProvider: (p: Provider) => void;
   configuredProviders: Provider[];
 }) {
+  const { t } = useT();
+  const providerLabel = (p: Provider): string => {
+    if (p === "local") return t("provider.local");
+    if (p === "vhs") return t("provider.vhs");
+    return PROVIDER_LABELS[p];
+  };
   return (
     <label className="kn-label">
-      Run with
+      {t("provider.runWith")}
       <select
         className="kn-input kn-input--select"
         value={provider}
@@ -2689,10 +2711,10 @@ function ProviderPicker({
         {(["anthropic", "openai", "nvidia", "gemini", "local", "vhs"] as Provider[]).map((p) => {
           const ok = configuredProviders.includes(p);
           // "vhs" reads "not linked" instead of "not configured" when absent.
-          const offLabel = p === "vhs" ? " (not linked)" : " (not configured)";
+          const offLabel = p === "vhs" ? t("provider.notLinked") : t("provider.notConfigured");
           return (
             <option key={p} value={p} disabled={!ok}>
-              {PROVIDER_LABELS[p]}
+              {providerLabel(p)}
               {ok ? "" : offLabel}
             </option>
           );
@@ -2707,12 +2729,11 @@ function ProviderPicker({
 // the text path, so we nudge the user toward a vision provider. Render it only
 // when `show` is true; styled with the shared kn-advisory class.
 function TextOnlyPdfWarning({ show }: { show: boolean }) {
+  const { t } = useT();
   if (!show) return null;
   return (
     <div className="kn-advisory" role="status">
-      ⚠️ This model reads text only — image/scanned PDFs (most pitch decks)
-      extract almost nothing. Use a vision provider (VHS-hosted, Claude, or
-      Gemini) to read decks.
+      {t("common.textOnlyPdfWarning")}
     </div>
   );
 }
@@ -2738,6 +2759,7 @@ function SourceInput({
   pdfFile: File | null;
   setPdfFile: (f: File | null) => void;
 }) {
+  const { t } = useT();
   return (
     <div className="kn-source">
       <div className="kn-tabs">
@@ -2745,19 +2767,19 @@ function SourceInput({
           className={`kn-tab ${mode === "url" ? "kn-tab--active" : ""}`}
           onClick={() => setMode("url")}
         >
-          From URL
+          {t("source.tabUrl")}
         </button>
         <button
           className={`kn-tab ${mode === "text" ? "kn-tab--active" : ""}`}
           onClick={() => setMode("text")}
         >
-          From pasted text
+          {t("source.tabText")}
         </button>
         <button
           className={`kn-tab ${mode === "pdf" ? "kn-tab--active" : ""}`}
           onClick={() => setMode("pdf")}
         >
-          From PDF
+          {t("source.tabPdf")}
         </button>
       </div>
 
@@ -2767,7 +2789,7 @@ function SourceInput({
           className="kn-input"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://acme.com or arxiv.org/abs/..."
+          placeholder={t("source.urlPlaceholder")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -2782,7 +2804,7 @@ function SourceInput({
               style={{ display: "none" }}
             />
             <span className="kn-btn kn-btn--ghost">
-              {pdfFile ? "Choose another PDF" : "Choose PDF file…"}
+              {pdfFile ? t("source.pickAnotherPdf") : t("source.pickPdf")}
             </span>
           </label>
           {pdfFile && (
@@ -2791,10 +2813,7 @@ function SourceInput({
             </span>
           )}
           {!pdfFile && (
-            <span className="kn-pdf-hint">
-              Pitch deck, white paper, founder one-pager. Text-based PDFs only —
-              scanned / image-only PDFs need OCR (not supported yet).
-            </span>
+            <span className="kn-pdf-hint">{t("source.pdfHint")}</span>
           )}
         </div>
       )}
@@ -2803,7 +2822,7 @@ function SourceInput({
           className="kn-input kn-input--textarea"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Paste website copy, founder bio, deck text…"
+          placeholder={t("source.textPlaceholder")}
           rows={6}
           spellCheck={false}
         />
@@ -2847,6 +2866,7 @@ function TemplateEditor({
   onBack: () => void;
   showToast: (m: string) => void;
 }) {
+  const { t } = useT();
   const [template, setTemplate] = useState<EditableTemplate>("simple-memo");
   const [section, setSection] = useState<EditableSection>("memo");
   const [draft, setDraft] = useState(() => getCustomPrompt("simple-memo", "memo"));
@@ -2883,14 +2903,10 @@ function TemplateEditor({
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
-        ← Back to Settings
+        {t("templateEditor.back")}
       </button>
-      <h2 className="kn-flow-title">Template Editor</h2>
-      <p className="kn-flow-sub">
-        Override the built-in prompt for any template / section combination.
-        Leave blank to use the default. The override replaces the structure
-        block; source / hints / prior_sections wiring stays intact.
-      </p>
+      <h2 className="kn-flow-title">{t("templateEditor.title")}</h2>
+      <p className="kn-flow-sub">{t("templateEditor.sub")}</p>
 
       <div className="kn-flow-row">
         <label className="kn-label">
@@ -2908,7 +2924,7 @@ function TemplateEditor({
           </select>
         </label>
         <label className="kn-label">
-          Section
+          {t("templateEditor.sectionLabel")}
           <select
             className="kn-input kn-input--select"
             value={section}
@@ -2916,7 +2932,7 @@ function TemplateEditor({
           >
             {sections.map((s) => (
               <option key={s} value={s}>
-                {SECTION_LABELS[s]}
+                {s === "memo" ? t("templateEditor.sectionMemo") : SECTION_LABELS[s]}
               </option>
             ))}
           </select>
@@ -2924,12 +2940,13 @@ function TemplateEditor({
       </div>
 
       <label className="kn-label kn-label--grow">
-        Custom prompt {hasOverride && <span className="kn-pill">override active</span>}
+        {t("templateEditor.customPrompt")}{" "}
+        {hasOverride && <span className="kn-pill">{t("templateEditor.overrideActive")}</span>}
         <textarea
           className="kn-input kn-input--textarea"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Leave blank to use the built-in template prompt. When non-empty, this REPLACES the section body — the source, prior sections, hints, security warning, and stage guidance still wrap automatically."
+          placeholder={t("templateEditor.placeholder")}
           rows={14}
           spellCheck={false}
         />
@@ -2937,11 +2954,11 @@ function TemplateEditor({
 
       <div className="kn-form-actions" style={{ marginTop: 14 }}>
         <button className="kn-btn kn-btn--primary" onClick={handleSave}>
-          Save override
+          {t("templateEditor.saveOverride")}
         </button>
         {hasOverride && (
           <button className="kn-btn" onClick={handleReset}>
-            Reset to default
+            {t("templateEditor.resetDefault")}
           </button>
         )}
       </div>
@@ -2980,6 +2997,7 @@ function TemplateGallery({
   // Fold a finished template run into a deal.
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
+  const { t } = useT();
   const [mode, setMode] = useState<"browse" | "edit" | "generate">("browse");
   const [templates, setTemplates] = useState<Template[]>(() => getAllTemplates());
   const [selectedId, setSelectedId] = useState<string>(
@@ -3014,14 +3032,14 @@ function TemplateGallery({
     return (
       <TemplateDesigner
         initial={editDraft}
-        onSave={async (t) => {
+        onSave={async (tpl) => {
           try {
-            await saveCustomTemplate(t);
+            await saveCustomTemplate(tpl);
             refresh();
-            setSelectedId(t.id);
-            showToast("Template saved");
+            setSelectedId(tpl.id);
+            showToast(t("gallery.savedToast"));
           } catch (e) {
-            showToast(`Could not save template: ${String(e)}`);
+            showToast(t("gallery.saveFailedToast", { error: String(e) }));
           }
         }}
         onClose={() => {
@@ -3061,34 +3079,31 @@ function TemplateGallery({
       setTemplates(next);
       setSelectedId(next[0]?.id ?? "");
       refreshTemplates?.();
-      showToast("Template deleted");
+      showToast(t("gallery.deletedToast"));
     } catch (e) {
-      showToast(`Could not delete template: ${String(e)}`);
+      showToast(t("gallery.deleteFailedToast", { error: String(e) }));
     }
   };
 
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onBack}>
-        ← Back
+        {t("common.back")}
       </button>
-      <h2 className="kn-flow-title">Report templates</h2>
-      <p className="kn-flow-sub">
-        Every report is built from blocks — each block holds its own layout,
-        style, and the prompt that fills it. Browse a layout, edit it, or
-        generate a report from it.
-      </p>
+      <h2 className="kn-flow-title">{t("gallery.title")}</h2>
+      <p className="kn-flow-sub">{t("gallery.sub")}</p>
 
       <div className="kn-tpl-tabs">
-        {templates.map((t) => (
+        {templates.map((tpl) => (
           <button
-            key={t.id}
-            className={`kn-tpl-tab ${t.id === selectedId ? "kn-tpl-tab--active" : ""}`}
-            onClick={() => setSelectedId(t.id)}
+            key={tpl.id}
+            className={`kn-tpl-tab ${tpl.id === selectedId ? "kn-tpl-tab--active" : ""}`}
+            onClick={() => setSelectedId(tpl.id)}
           >
-            <span className="kn-tpl-tab-name">{t.name}</span>
+            <span className="kn-tpl-tab-name">{tpl.nameKey ? t(tpl.nameKey) : tpl.name}</span>
             <span className="kn-tpl-tab-meta">
-              {isStarter(t.id) ? "starter" : "custom"} · {t.blocks.length} blocks
+              {isStarter(tpl.id) ? "starter" : "custom"} ·{" "}
+              {t("gallery.blocksCount", { n: tpl.blocks.length })}
             </span>
           </button>
         ))}
@@ -3097,17 +3112,19 @@ function TemplateGallery({
       {selected && (
         <>
           <div className="kn-tpl-actionbar">
-            <span className="kn-tpl-desc">{selected.description}</span>
+            <span className="kn-tpl-desc">
+              {selected.descriptionKey ? t(selected.descriptionKey) : selected.description}
+            </span>
             <div className="kn-tpl-actions">
               <button className="kn-btn kn-btn--primary" onClick={() => setMode("generate")}>
-                Generate a report
+                {t("gallery.generateBtn")}
               </button>
               <button className="kn-btn" onClick={openEdit}>
-                {isStarter(selected.id) ? "Duplicate & edit" : "Edit"}
+                {isStarter(selected.id) ? t("gallery.duplicateEdit") : t("gallery.edit")}
               </button>
               {!isStarter(selected.id) && (
                 <button className="kn-btn" onClick={handleDelete}>
-                  Delete
+                  {t("gallery.delete")}
                 </button>
               )}
             </div>
@@ -3148,6 +3165,7 @@ function GenerateFromTemplate({
   // Fold the finished template report into a deal (new or existing).
   onSaveToDeal?: (req: SaveToDealRequest) => void;
 }) {
+  const { t } = useT();
   const provider = activeProvider;
   const setProvider = setActiveProvider;
   const [mode, setMode] = useState<SourceMode>("url");
@@ -3190,7 +3208,7 @@ function GenerateFromTemplate({
         const c = (resById[b.id] ?? "").trim();
         if (!c) return "";
         if (b.type === "heading" || b.type === "cover") return `# ${c}`;
-        return `## ${b.label}\n\n${c}`;
+        return `## ${b.labelKey ? t(b.labelKey) : b.label}\n\n${c}`;
       })
       .filter((s) => s.trim().length > 0)
       .join("\n\n");
@@ -3205,7 +3223,9 @@ function GenerateFromTemplate({
     // refused rather than burning N hosted calls.
     const contentBlockCount = template.blocks.filter((b) => b.type !== "pageBreak").length;
     if (contentBlockCount > MAX_TEMPLATE_BLOCKS) {
-      setErr(`Template has ${contentBlockCount} content blocks — max ${MAX_TEMPLATE_BLOCKS}. Remove some in the editor.`);
+      setErr(
+        t("generate.capExceeded", { n: contentBlockCount, max: MAX_TEMPLATE_BLOCKS }),
+      );
       setRunning(false);
       return;
     }
@@ -3270,7 +3290,7 @@ function GenerateFromTemplate({
         }
         acc[b.id] = content;
         setResults({ ...acc });
-        prior += `## ${b.label}\n${content.slice(0, 300)}\n\n`;
+        prior += `## ${b.labelKey ? t(b.labelKey) : b.label}\n${content.slice(0, 300)}\n\n`;
       }
       setRunningId(null);
       setCompiled(compile(acc));
@@ -3286,7 +3306,7 @@ function GenerateFromTemplate({
   const handleCopy = () => {
     if (!compiled) return;
     navigator.clipboard.writeText(compiled);
-    showToast("Report copied");
+    showToast(t("generate.reportCopied"));
   };
 
   // Derive a human title from the first markdown heading, else the template
@@ -3297,7 +3317,7 @@ function GenerateFromTemplate({
       .map((l) => l.trim())
       .find((l) => /^#{1,3}\s+\S/.test(l));
     if (heading) return heading.replace(/^#{1,3}\s+/, "").slice(0, 80);
-    return `${template.name} · ${new Date().toLocaleDateString()}`;
+    return `${template.nameKey ? t(template.nameKey) : template.name} · ${new Date().toLocaleDateString()}`;
   };
 
   // Fold the finished template report into a deal. A template report has no
@@ -3323,7 +3343,7 @@ function GenerateFromTemplate({
     id: "preview",
     title: deriveTitle(compiled ?? ""),
     templateId: template.id,
-    templateName: template.name,
+    templateName: template.nameKey ? t(template.nameKey) : template.name,
     provider,
     createdAt: Date.now(),
     markdown: compiled ?? "",
@@ -3335,9 +3355,9 @@ function GenerateFromTemplate({
     setExporting("pdf");
     try {
       const ok = await exportReportToPdf(ephemeralReport());
-      if (ok) showToast("Opening print dialog — choose “Save as PDF”");
+      if (ok) showToast(t("generate.openPrintDialog"));
     } catch {
-      showToast("PDF export failed");
+      showToast(t("generate.pdfFailed"));
     } finally {
       setExporting(null);
     }
@@ -3348,9 +3368,9 @@ function GenerateFromTemplate({
     setExporting("docx");
     try {
       const saved = await exportReportToDocx(ephemeralReport());
-      if (saved) showToast("Word document saved");
+      if (saved) showToast(t("generate.docxSaved"));
     } catch {
-      showToast("DOCX export failed");
+      showToast(t("generate.docxFailed"));
     } finally {
       setExporting(null);
     }
@@ -3359,13 +3379,14 @@ function GenerateFromTemplate({
   return (
     <div className="kn-flow">
       <button className="kn-back" onClick={onClose}>
-        ← Back to templates
+        {t("generate.back")}
       </button>
-      <h2 className="kn-flow-title">Generate · {template.name}</h2>
-      <p className="kn-flow-sub">
-        {genBlocks.length} sections will be written from your source, one block
-        at a time.
-      </p>
+      <h2 className="kn-flow-title">
+        {t("generate.title", {
+          templateName: template.nameKey ? t(template.nameKey) : template.name,
+        })}
+      </h2>
+      <p className="kn-flow-sub">{t("generate.sub", { n: genBlocks.length })}</p>
 
       <div className="kn-disclaimer">
         ⚠ Draft only — verify against the source before sharing or acting on it.
@@ -3400,29 +3421,29 @@ function GenerateFromTemplate({
           className="kn-input"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="things the source doesn't say"
+          placeholder={t("generate.notePlaceholder")}
         />
       </label>
 
       <div className="kn-form-actions" style={{ marginTop: 18 }}>
         <button className="kn-btn kn-btn--primary" onClick={handleRun} disabled={!canRun}>
-          {running ? "Generating…" : "Generate report"}
+          {running ? t("generate.generating") : t("generate.primary")}
         </button>
         {compiled && (
           <>
             {onSaveToDeal && (
               <button className="kn-btn kn-btn--primary" onClick={handleSaveToDeal}>
-                Save to report
+                {t("quickMemo.saveToReport")}
               </button>
             )}
             <button className="kn-btn" onClick={handleCopy}>
-              Copy report
+              {t("generate.copyReport")}
             </button>
             <button className="kn-btn" onClick={handleExportPdf} disabled={!!exporting}>
-              {exporting === "pdf" ? "Exporting…" : "Export PDF"}
+              {exporting === "pdf" ? t("generate.exportingPdf") : t("generate.exportPdf")}
             </button>
             <button className="kn-btn" onClick={handleExportDocx} disabled={!!exporting}>
-              {exporting === "docx" ? "Exporting…" : "Export DOCX"}
+              {exporting === "docx" ? t("generate.exportingPdf") : t("generate.exportDocx")}
             </button>
           </>
         )}
@@ -3442,8 +3463,10 @@ function GenerateFromTemplate({
             return (
               <div key={b.id} className={`kn-gen-step kn-gen-step--${state}`}>
                 <span className="kn-gen-dot" />
-                {b.label}
-                {state === "run" && <span className="kn-gen-run"> · drafting…</span>}
+                {b.labelKey ? t(b.labelKey) : b.label}
+                {state === "run" && (
+                  <span className="kn-gen-run"> {t("generate.progressDrafting")}</span>
+                )}
               </div>
             );
           })}
@@ -3461,7 +3484,9 @@ function GenerateFromTemplate({
           const pageList = pages.length > 0 ? pages : [compiled];
           return (
             <div className="kn-result">
-              <h3 className="kn-result-title">{template.name}</h3>
+              <h3 className="kn-result-title">
+                {template.nameKey ? t(template.nameKey) : template.name}
+              </h3>
               <div className="kn-a4-stack kn-result-pages">
                 {pageList.map((chunk, i) => (
                   <section key={i} className="kn-a4-doc kn-markdown">

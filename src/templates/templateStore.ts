@@ -13,6 +13,7 @@ import type {
   TemplateVariant,
 } from "./types";
 import { MAX_TEMPLATE_BLOCKS } from "./types";
+import type { MessageKey } from "../i18n/messages";
 import { STARTER_TEMPLATES } from "./starters";
 
 // ─── Custom templates — SQLite (Phase D) ──────────────────────────────
@@ -227,24 +228,33 @@ function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${idCounter.toString(36)}`;
 }
 
-export function duplicateTemplate(t: Template): Template {
+export function duplicateTemplate(t: Template, displayName?: string): Template {
   const clone: Template = JSON.parse(JSON.stringify(t));
-  return { ...clone, id: uid("custom"), name: `${t.name} (copy)` };
+  // A duplicate becomes a user-owned custom template — strip the starter i18n
+  // keys so it renders as fixed text (in whatever language was on-screen at
+  // duplication time) rather than staying dynamically re-translated forever.
+  delete clone.nameKey;
+  delete clone.descriptionKey;
+  for (const b of clone.blocks) {
+    delete b.labelKey;
+    if (b.content.mode === "static") delete b.content.textKey;
+  }
+  return { ...clone, id: uid("custom"), name: `${displayName ?? t.name} (copy)` };
 }
 
-export const BLOCK_TYPE_META: Record<BlockType, { label: string; icon: string }> = {
-  cover: { label: "Cover", icon: "▭" },
-  heading: { label: "Heading", icon: "H" },
-  paragraph: { label: "Paragraph", icon: "¶" },
-  bullets: { label: "Bullets", icon: "•" },
-  metrics: { label: "Metric strip", icon: "▦" },
-  chart: { label: "Chart", icon: "▮" },
-  table: { label: "Table", icon: "▤" },
-  scoreBox: { label: "Score box", icon: "★" },
-  logo: { label: "Logo", icon: "◈" },
-  divider: { label: "Divider", icon: "—" },
+export const BLOCK_TYPE_META: Record<BlockType, { label: string; labelKey: MessageKey; icon: string }> = {
+  cover: { label: "Cover", labelKey: "block.cover", icon: "▭" },
+  heading: { label: "Heading", labelKey: "block.heading", icon: "H" },
+  paragraph: { label: "Paragraph", labelKey: "block.paragraph", icon: "¶" },
+  bullets: { label: "Bullets", labelKey: "block.bullets", icon: "•" },
+  metrics: { label: "Metric strip", labelKey: "block.metrics", icon: "▦" },
+  chart: { label: "Chart", labelKey: "block.chart", icon: "▮" },
+  table: { label: "Table", labelKey: "block.table", icon: "▤" },
+  scoreBox: { label: "Score box", labelKey: "block.scoreBox", icon: "★" },
+  logo: { label: "Logo", labelKey: "block.logo", icon: "◈" },
+  divider: { label: "Divider", labelKey: "block.divider", icon: "—" },
   // W7 layout marker — not offered in the content palette; PagedView consumes it.
-  pageBreak: { label: "Page break", icon: "⤓" },
+  pageBreak: { label: "Page break", labelKey: "block.pageBreak", icon: "⤓" },
 };
 
 const DEFAULT_PROMPT: Partial<Record<BlockType, string>> = {
@@ -267,6 +277,7 @@ export function newBlock(type: BlockType): Block {
       id: uid("brk"),
       type,
       label: "Page break",
+      labelKey: BLOCK_TYPE_META.pageBreak.labelKey,
       width: "full",
       content: { mode: "static", text: "" },
     };
@@ -276,9 +287,14 @@ export function newBlock(type: BlockType): Block {
     id: uid("blk"),
     type,
     label: BLOCK_TYPE_META[type].label,
+    labelKey: BLOCK_TYPE_META[type].labelKey,
     width: "full",
     content: isStatic
-      ? { mode: "static", text: type === "logo" ? "Firm logo" : "" }
+      ? {
+          mode: "static",
+          text: type === "logo" ? "Firm logo" : "",
+          ...(type === "logo" ? { textKey: "starter.staticFirmLogo" as MessageKey } : {}),
+        }
       : { mode: "generated", prompt: DEFAULT_PROMPT[type] ?? "" },
   };
 }

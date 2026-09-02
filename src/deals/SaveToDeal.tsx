@@ -8,6 +8,7 @@ import {
   type SourceKind,
   type VersionKind,
 } from "./dealStore";
+import { useT } from "../i18n";
 
 // ─── Save to deal (entry from the one-shot generate flows) ────────────
 //
@@ -50,6 +51,7 @@ export function SaveToDealModal({
   // Called with the saved deal id so the caller can jump to it.
   onSaved: (dealId: string) => void;
 }) {
+  const { t } = useT();
   const [target, setTarget] = useState<"new" | "existing">("new");
   const [deals, setDeals] = useState<DealListRow[]>([]);
   const [newName, setNewName] = useState(suggestedName);
@@ -92,7 +94,9 @@ export function SaveToDealModal({
 
       // Capture the already-generated result as the next version.
       const defaultNote =
-        target === "new" ? "from deck" : "+ added source";
+        target === "new"
+          ? t("saveToDeal.versionNotePhNew")
+          : t("saveToDeal.versionNotePhExisting");
       await createVersionFromContent({
         dealId,
         kind,
@@ -102,7 +106,11 @@ export function SaveToDealModal({
         note: note.trim() || defaultNote,
       });
 
-      showToast(target === "new" ? "Saved as a new report" : "Added to report");
+      showToast(
+        target === "new"
+          ? t("saveToDeal.savedNew")
+          : t("saveToDeal.savedExisting"),
+      );
       onSaved(dealId);
     } catch (e) {
       setErr(String(e));
@@ -117,13 +125,10 @@ export function SaveToDealModal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Save to report"
+        aria-label={t("saveToDeal.dialogAria")}
       >
-        <h3 className="kn-result-title">Save to report</h3>
-        <p className="kn-flow-sub">
-          Fold this {kind === "ic" ? "IC report" : "memo"} into a report so it can
-          evolve as you gather more — a data room, supplements, a second deck.
-        </p>
+        <h3 className="kn-result-title">{t("saveToDeal.title")}</h3>
+        <p className="kn-flow-sub">{kind === "ic" ? t("saveToDeal.subIc") : t("saveToDeal.subMemo")}</p>
 
         <div className="kn-tabs" style={{ marginBottom: 12 }}>
           <button
@@ -131,33 +136,37 @@ export function SaveToDealModal({
             onClick={() => setTarget("new")}
             disabled={busy}
           >
-            New report
+            {t("saveToDeal.tabNew")}
           </button>
           <button
             className={`kn-tab ${target === "existing" ? "kn-tab--active" : ""}`}
             onClick={() => setTarget("existing")}
             disabled={busy || deals.length === 0}
-            title={deals.length === 0 ? "No reports yet" : "Add to an existing report"}
+            title={
+              deals.length === 0
+                ? t("saveToDeal.noReports")
+                : t("saveToDeal.addToExisting")
+            }
           >
-            Existing report
+            {t("saveToDeal.tabExisting")}
           </button>
         </div>
 
         {target === "new" ? (
           <label className="kn-label kn-label--grow">
-            Report name
+            {t("saveToDeal.reportName")}
             <input
               className="kn-input"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="e.g. Acme Robotics — Seed"
+              placeholder={t("saveToDeal.reportNamePh")}
               disabled={busy}
               autoFocus
             />
           </label>
         ) : (
           <label className="kn-label kn-label--grow">
-            Add to
+            {t("saveToDeal.addToLabel")}
             <select
               className="kn-input kn-input--select"
               value={existingId}
@@ -175,24 +184,23 @@ export function SaveToDealModal({
 
         {source ? (
           <p className="kn-deal-panel-hint">
-            The source ({source.kind.toUpperCase()} · {source.name}) is attached
-            to the report too, so a later “New version” regenerates from it.
+            {t("saveToDeal.sourceAttachedHint", { kind: source.kind.toUpperCase(), name: source.name })}
           </p>
         ) : (
-          <p className="kn-deal-panel-hint">
-            Heads up — this run's source couldn't be captured, so the version is
-            saved without an attached source. Add one from the report view to
-            regenerate later.
-          </p>
+          <p className="kn-deal-panel-hint">{t("saveToDeal.noSourceHint")}</p>
         )}
 
         <label className="kn-label kn-label--grow">
-          Version note (optional)
+          {t("saveToDeal.versionNoteLabel")}
           <input
             className="kn-input"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder={target === "new" ? "from deck" : "+ added source"}
+            placeholder={
+              target === "new"
+                ? t("saveToDeal.versionNotePhNew")
+                : t("saveToDeal.versionNotePhExisting")
+            }
             disabled={busy}
           />
         </label>
@@ -207,10 +215,14 @@ export function SaveToDealModal({
             onClick={save}
             disabled={!canSave}
           >
-            {busy ? "Saving…" : target === "new" ? "Create report" : "Add to report"}
+            {busy
+              ? t("saveToDeal.saving")
+              : target === "new"
+                ? t("saveToDeal.createNew")
+                : t("saveToDeal.addToBtn")}
           </button>
           <button className="kn-btn kn-btn--ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("deal.cancel")}
           </button>
         </div>
       </div>

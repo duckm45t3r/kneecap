@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Block, BlockAccent, BlockFont, BlockSize } from "./types";
 import type { FirmLogo } from "./templateStore";
+import { useT } from "../i18n";
 
 // Read-only renderer for one block. Used by the template gallery now, and by the
 // final document view / editor canvas later. Generated blocks render their
@@ -42,8 +43,8 @@ function headingStyle(block: Block): CSSProperties {
   };
 }
 
-function ghost(prompt: string) {
-  return <p className="kn-tpl-ghost">AI-generated · {prompt}</p>;
+function ghost(t: ReturnType<typeof useT>["t"], prompt: string) {
+  return <p className="kn-tpl-ghost">{t("block.ghost", { prompt })}</p>;
 }
 
 export function BlockView({
@@ -53,6 +54,7 @@ export function BlockView({
   block: Block;
   firmLogo?: FirmLogo | null;
 }) {
+  const { t } = useT();
   const accent = block.style?.accent;
   const sample = block.sample;
   const prompt = block.content.mode === "generated" ? block.content.prompt : "";
@@ -64,12 +66,16 @@ export function BlockView({
       body = firmLogo ? (
         <img
           src={firmLogo.dataUrl}
-          alt={firmLogo.name || "Firm logo"}
+          alt={firmLogo.name || t("studio.firmLogo")}
           className="kn-tpl-logo-img"
         />
       ) : (
         <div className="kn-tpl-logo">
-          {block.content.mode === "static" ? block.content.text : "Firm logo"}
+          {block.content.mode === "static"
+            ? block.content.textKey
+              ? t(block.content.textKey)
+              : block.content.text
+            : t("starter.staticFirmLogo")}
         </div>
       );
       break;
@@ -82,7 +88,7 @@ export function BlockView({
       body = (
         <div className="kn-tpl-cover">
           <div className="kn-tpl-cover-title" style={headingStyle(block)}>
-            {sample?.text ?? block.label}
+            {sample?.text ?? (block.labelKey ? t(block.labelKey) : block.label)}
           </div>
           {sample?.caption && <div className="kn-tpl-cover-sub">{sample.caption}</div>}
         </div>
@@ -90,11 +96,15 @@ export function BlockView({
       break;
 
     case "heading":
-      body = <div className="kn-tpl-h" style={headingStyle(block)}>{sample?.text ?? block.label}</div>;
+      body = (
+        <div className="kn-tpl-h" style={headingStyle(block)}>
+          {sample?.text ?? (block.labelKey ? t(block.labelKey) : block.label)}
+        </div>
+      );
       break;
 
     case "paragraph":
-      body = sample?.text ? <p className="kn-tpl-p">{sample.text}</p> : ghost(prompt);
+      body = sample?.text ? <p className="kn-tpl-p">{sample.text}</p> : ghost(t, prompt);
       break;
 
     case "bullets":
@@ -105,7 +115,7 @@ export function BlockView({
           ))}
         </ul>
       ) : (
-        ghost(prompt)
+        ghost(t, prompt)
       );
       break;
 
@@ -120,7 +130,7 @@ export function BlockView({
           ))}
         </div>
       ) : (
-        ghost(prompt)
+        ghost(t, prompt)
       );
       break;
 
@@ -140,7 +150,7 @@ export function BlockView({
           {sample?.caption && <div className="kn-tpl-caption">{sample.caption}</div>}
         </div>
       ) : (
-        ghost(prompt)
+        ghost(t, prompt)
       );
       break;
     }
@@ -159,7 +169,7 @@ export function BlockView({
           </tbody>
         </table>
       ) : (
-        ghost(prompt)
+        ghost(t, prompt)
       );
       break;
 
@@ -173,7 +183,7 @@ export function BlockView({
           </div>
         </div>
       ) : (
-        ghost(prompt)
+        ghost(t, prompt)
       );
       break;
   }
@@ -182,7 +192,9 @@ export function BlockView({
 
   return (
     <div className={`kn-tpl-block kn-tpl-block--${block.width}`}>
-      {showEyebrow && <div className="kn-tpl-eyebrow">{block.label}</div>}
+      {showEyebrow && (
+        <div className="kn-tpl-eyebrow">{block.labelKey ? t(block.labelKey) : block.label}</div>
+      )}
       {body}
     </div>
   );
