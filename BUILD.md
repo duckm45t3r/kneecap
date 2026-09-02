@@ -5,8 +5,15 @@ auto-updating `.app` / `.dmg` that you can put on GitHub Releases. It assumes
 macOS on Apple Silicon and the repo checked out.
 
 Everything in `tauri.conf.json` under signing + updater is a **placeholder**
-right now. The build compiles and runs unsigned without touching any of it; you
-only need the steps below when you want to **distribute**.
+right now. The build compiles and runs **locally** without touching any of it;
+you only need the full Developer-ID + notarize steps below when you want the
+download to open with zero warnings.
+
+> ⚠️ **"Runs locally" ≠ "downloaded copy runs."** A `.app` you open straight
+> out of `target/` has no quarantine flag, so Gatekeeper never inspects its
+> signature — it just launches. The moment a user **downloads** the `.dmg` from
+> a browser, the file gets `com.apple.quarantine` and Gatekeeper hard-verifies
+> the signature. See §7 for the ad-hoc trap that bit the 2026-07-01 beta.
 
 ---
 
@@ -188,8 +195,10 @@ Settings is a small follow-up.
 
 - [ ] `plugins.updater.pubkey` — replace throwaway key with your real
       `tauri signer generate` public key (step 2).
-- [ ] `bundle.macOS.signingIdentity` — set your Developer ID, or export
-      `APPLE_SIGNING_IDENTITY` (step 1). Currently `null` = unsigned.
+- [ ] `bundle.macOS.signingIdentity` — currently `"-"` (ad-hoc: bundle is
+      self-consistently signed, downloads open via right-click → Open; see §7).
+      Set your Developer ID, or export `APPLE_SIGNING_IDENTITY` (step 1), to
+      remove the unidentified-developer prompt entirely.
 - [ ] `plugins.updater.endpoints` — confirm the GitHub repo owner/name.
 - [ ] Export Apple notarization secrets (`APPLE_ID` / `APPLE_PASSWORD` /
       `APPLE_TEAM_ID`) before `npx tauri build`.
@@ -276,3 +285,58 @@ Currently disabled for Windows — the updater `latest.json` only carries a
    ```
 3. tauri-action will emit `.nsis.zip` + `.nsis.zip.sig` when the private key is
    present.
+
+---
+
+## 7. The ad-hoc signature trap (2026-07-01 beta post-mortem)
+
+**Symptom:** users who downloaded the beta `.dmg` got
+*"KN33C4P.app is damaged and can't be opened. You should move it to the Trash."*
+— and right-click → Open did **not** bypass it.
+
+**Root cause:** `bundle.macOS.signingIdentity` was `null`. With `null`, Tauri
+does **not** sign the `.app` bundle at all — so there is no
+`Contents/_CodeSignature/CodeResources`. But on Apple Silicon the linker
+*automatically* ad-hoc-signs the main Mach-O executable. The result is a
+contradiction: the executable's signature says "this bundle has sealed
+resources" while the bundle has none. `codesign --verify` fails with
+`code has no resources but signature indicates they must be present`, and
+Gatekeeper reads that as **damaged** (not merely "unidentified"), which
+right-click → Open cannot override.
+
+**Fix (permanent):** set `bundle.macOS.signingIdentity` to `"-"` (done
+2026-07-25). `"-"` tells Tauri to ad-hoc-sign the **whole bundle**, producing a
+self-consistent signature. A downloaded copy then shows the normal
+*"unidentified developer"* prompt, which right-click → Open **does** bypass —
+matching the install note on `/tools/kneecap`.
+
+**Fix (an already-built bad `.app`, no rebuild):**
+
+```bash
+APP=path/to/KN33C4P.app
+codesign --force --deep --sign - "$APP"          # clean ad-hoc re-sign
+codesign --verify --deep --strict --verbose=2 "$APP"   # must exit 0
+
+# repackage the DMG (with the drag-to-Applications symlink)
+STAGE=$(mktemp -d)
+cp -R "$APP" "$STAGE/KN33C4P.app"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname KN33C4P -srcfolder "$STAGE" -ov -format UDZO \
+  KN33C4P_0.1.0_aarch64.dmg
+```
+
+**Always verify before every release** (`exit 0` required):
+
+```bash
+codesign --verify --deep --strict --verbose=2 KN33C4P.app
+```
+
+Do NOT trust "it launches on my Mac" — that copy has no quarantine flag. Test a
+*downloaded* copy, or `xattr -w com.apple.quarantine "0083;0;Safari;" a-copy.app`
+then `spctl -a -vvv a-copy.app`: a clean `rejected` is fine (right-click opens);
+a `code has no resources…` message means still broken.
+
+> This is still an **ad-hoc** signature — Gatekeeper always shows the
+> unidentified-developer prompt. Removing the prompt entirely requires the
+> Developer-ID + notarize path in §0–§3, which needs Wei's Apple Developer
+> account.
